@@ -258,6 +258,27 @@ function getJson(url) {
     JSON.stringify(dialogClosed),
   );
 
+  await evaluate("document.querySelector('.thread-heading-actions button')?.click(); true");
+  await sleep(150);
+  await evaluate(
+    "[...document.querySelectorAll('.thread-heading-menu button')].find(b=>b.textContent.includes('查看已归档会话'))?.click(); true",
+  );
+  await sleep(500);
+  check(
+    '归档视图切换',
+    await evaluate("document.querySelector('.thread-heading span')?.textContent.includes('归档')"),
+  );
+  await evaluate("document.querySelector('.thread-heading-actions button')?.click(); true");
+  await sleep(150);
+  await evaluate(
+    "[...document.querySelectorAll('.thread-heading-menu button')].find(b=>b.textContent.includes('返回对话列表'))?.click(); true",
+  );
+  await sleep(500);
+  check(
+    '归档视图返回',
+    await evaluate("document.querySelector('.thread-heading span')?.textContent.includes('最近')"),
+  );
+
   socket.close();
   if (failures.length > 0) {
     console.error(`\nSMOKE_FAILED ${failures.length} 项`);

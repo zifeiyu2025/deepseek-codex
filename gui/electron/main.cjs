@@ -178,15 +178,25 @@ function apiKeyFile() {
   return path.join(app.getPath('userData'), 'deepseek.key');
 }
 
-function loadApiKey() {
+async function loadApiKey() {
   try {
     const file = apiKeyFile();
     if (!fs.existsSync(file)) return;
-    if (!safeStorage.isEncryptionAvailable()) {
+    if (!(await safeStorage.isAsyncEncryptionAvailable())) {
       appendMainLog('api key present but safeStorage is unavailable');
       return;
     }
-    apiKey = safeStorage.decryptString(fs.readFileSync(file));
+    const encrypted = await fs.promises.readFile(file);
+    const decrypted = await safeStorage.decryptStringAsync(encrypted);
+    apiKey = decrypted.result;
+    if (decrypted.shouldReEncrypt) {
+      try {
+        const refreshed = await safeStorage.encryptStringAsync(decrypted.result);
+        await fs.promises.writeFile(file, refreshed);
+      } catch {
+        /* keep the readable key even if re-encryption fails */
+      }
+    }
     appendMainLog('api key loaded');
   } catch (error) {
     apiKey = null;
@@ -1810,9 +1820,12 @@ handleIpc('app:api-key-status', () => ({
 handleIpc('app:set-api-key', async (_event, key) => {
   const trimmed = typeof key === 'string' ? key.trim() : '';
   if (!trimmed.startsWith('sk-')) throw new Error('API Key 应以 sk- 开头');
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('当前系统不支持安全存储');
+  if (!(await safeStorage.isAsyncEncryptionAvailable())) {
+    throw new Error('当前系统不支持安全存储');
+  }
   fs.mkdirSync(path.dirname(apiKeyFile()), { recursive: true });
-  fs.writeFileSync(apiKeyFile(), safeStorage.encryptString(trimmed));
+  const encrypted = await safeStorage.encryptStringAsync(trimmed);
+  await fs.promises.writeFile(apiKeyFile(), encrypted);
   apiKey = trimmed;
   await restartEngine();
   return { ok: true };
@@ -1825,9 +1838,9 @@ if (!app.requestSingleInstanceLock()) {
     showWindow();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     app.setAppUserModelId('local.deepseek.codex');
-    loadApiKey();
+    await loadApiKey();
     startEngine();
     createWindow();
     createTray();

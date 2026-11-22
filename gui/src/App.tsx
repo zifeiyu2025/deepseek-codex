@@ -2230,13 +2230,11 @@ export default function App() {
   }, []);
 
   const toggleArchived = useCallback(() => {
-    setShowArchived((previous) => {
-      const next = !previous;
-      archivedRef.current = next;
-      setThreadQuery('');
-      refreshThreads();
-      return next;
-    });
+    const next = !archivedRef.current;
+    archivedRef.current = next;
+    setShowArchived(next);
+    setThreadQuery('');
+    refreshThreads();
   }, [refreshThreads]);
 
   const refreshReviewMeta = useCallback(() => {
@@ -2247,6 +2245,15 @@ export default function App() {
   const updateReviewCount = useCallback((count: number) => {
     setReviewCount(count);
   }, []);
+
+  useEffect(() => {
+    setReviewCount(0);
+  }, [activeCwd]);
+
+  useEffect(() => {
+    if (railOpen && railTab === 'review') return;
+    setReviewCount(git?.repo ? git.changed || 0 : 0);
+  }, [activeCwd, git?.changed, git?.repo, railOpen, railTab]);
 
   useEffect(() => {
     window.codex
