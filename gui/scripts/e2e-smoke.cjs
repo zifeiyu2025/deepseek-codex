@@ -59,6 +59,11 @@ function getJson(url) {
     return response.result?.result?.value;
   }
 
+  await evaluate(
+    "(()=>{const button=document.querySelector('.page-view .page-ghost, .plugins-page .page-ghost'); if(button) button.click(); return true;})()",
+  );
+  await sleep(300);
+
   const failures = [];
   const check = (name, condition, detail = '') => {
     if (condition) {
@@ -104,7 +109,7 @@ function getJson(url) {
     await evaluate(
       "window.dispatchEvent(new KeyboardEvent('keydown',{key:'j',ctrlKey:true,bubbles:true})); true",
     );
-    await sleep(2500);
+    await sleep(3000);
   }
   const terminal = JSON.parse(
     await evaluate(
@@ -113,11 +118,36 @@ function getJson(url) {
   );
   check('PTY 终端挂载', terminal.dock && terminal.xterm);
   check('后台终端入口', terminal.bg);
-  if (!terminalOpen && terminal.dock) {
+  if (terminal.dock) {
     await evaluate(
       "window.dispatchEvent(new KeyboardEvent('keydown',{key:'j',ctrlKey:true,bubbles:true})); true",
     );
-    await sleep(500);
+    await sleep(400);
+    const hidden = JSON.parse(
+      await evaluate(
+        "JSON.stringify({dock:!!document.querySelector('.terminal-dock'),xterm:!!document.querySelector('.xterm'),display:document.querySelector('.terminal-dock')?.style.display})",
+      ),
+    );
+    await evaluate(
+      "window.dispatchEvent(new KeyboardEvent('keydown',{key:'j',ctrlKey:true,bubbles:true})); true",
+    );
+    await sleep(700);
+    const shown = JSON.parse(
+      await evaluate(
+        "JSON.stringify({xterm:!!document.querySelector('.xterm'),display:document.querySelector('.terminal-dock')?.style.display})",
+      ),
+    );
+    check(
+      '终端收起保活',
+      hidden.dock && hidden.xterm && shown.xterm && shown.display !== 'none',
+      `hidden=${JSON.stringify(hidden)} shown=${JSON.stringify(shown)}`,
+    );
+    if (!terminalOpen) {
+      await evaluate(
+        "window.dispatchEvent(new KeyboardEvent('keydown',{key:'j',ctrlKey:true,bubbles:true})); true",
+      );
+      await sleep(400);
+    }
   }
 
   await evaluate("document.querySelector('.account-settings')?.click(); true");
@@ -133,6 +163,14 @@ function getJson(url) {
       settingsTabs.includes(tab),
     ),
     settingsTabs.join(' / '),
+  );
+  await evaluate(
+    "(()=>{const option=document.querySelector('.settings-pane:not(.hidden) .question-option:not(.selected)'); if(option) option.click(); return true;})()",
+  );
+  await sleep(250);
+  check(
+    '设置修改后保持打开',
+    await evaluate("!!document.querySelector('.settings-back')"),
   );
   await evaluate("document.querySelector('.settings-back')?.click(); true");
   await sleep(500);
@@ -152,6 +190,16 @@ function getJson(url) {
     capabilitySections.join(' / '),
   );
   check('插件市场表单', await evaluate("!!document.querySelector('.marketplace-form')"));
+  await evaluate(
+    "[...document.querySelectorAll('.page-tabs button')].find(b=>b.textContent.trim()==='技能')?.click(); true",
+  );
+  await sleep(400);
+  check(
+    'Hooks 在技能页可见',
+    await evaluate(
+      "(()=>{const label=[...document.querySelectorAll('.cap-section .setting-label')].find(e=>e.textContent.trim()==='Hooks'); return !!label && label.getClientRects().length>0;})()",
+    ),
+  );
   await evaluate("document.querySelector('.plugins-page .page-ghost')?.click(); true");
   await sleep(400);
 

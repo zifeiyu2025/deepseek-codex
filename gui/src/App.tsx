@@ -2083,6 +2083,9 @@ export default function App() {
   const [terminalOpen, setTerminalOpen] = useState(
     () => localStorage.getItem('deepseek-codex.terminal') === '1',
   );
+  const [terminalMounted, setTerminalMounted] = useState(
+    () => localStorage.getItem('deepseek-codex.terminal') === '1',
+  );
   const [railTab, setRailTab] = useState<RailTab>(() => {
     const saved = localStorage.getItem('deepseek-codex.rail.tab');
     return saved === 'browser' || saved === 'review' ? saved : 'files';
@@ -2326,6 +2329,31 @@ export default function App() {
   }, [menuThreadId, sectionMenuId]);
 
   useEffect(() => {
+    if (searchOpen) {
+      setAutomationOpen(false);
+      setCapabilitiesOpen(false);
+    }
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (automationOpen) {
+      setSearchOpen(false);
+      setCapabilitiesOpen(false);
+    }
+  }, [automationOpen]);
+
+  useEffect(() => {
+    if (capabilitiesOpen) {
+      setSearchOpen(false);
+      setAutomationOpen(false);
+    }
+  }, [capabilitiesOpen]);
+
+  useEffect(() => {
+    if (terminalOpen) setTerminalMounted(true);
+  }, [terminalOpen]);
+
+  useEffect(() => {
     if (!threadHeadingMenu && !accountMenuOpen) return;
     const close = (event: MouseEvent) => {
       const target = event.target as Element;
@@ -2359,6 +2387,8 @@ export default function App() {
       if (!(event.ctrlKey || event.metaKey)) return;
       if (document.querySelector('.key-overlay')) return;
       const key = event.key.toLowerCase();
+      const pageOpen = searchOpen || automationOpen || capabilitiesOpen || settingsOpen;
+      if (pageOpen && key !== 'n' && key !== ',') return;
       if (key === 'j') {
         event.preventDefault();
         setTerminalOpen((previous) => !previous);
@@ -2381,7 +2411,14 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [railOpen, railTab]);
+  }, [
+    automationOpen,
+    capabilitiesOpen,
+    railOpen,
+    railTab,
+    searchOpen,
+    settingsOpen,
+  ]);
 
   const openRail = useCallback((tab?: RailTab) => {
     if (tab) setRailTab(tab);
@@ -4921,7 +4958,11 @@ export default function App() {
 
       <main
         className={`main ${
-          automationOpen || searchOpen ? 'page-mode' : items.length === 0 ? 'empty' : ''
+          automationOpen || searchOpen || capabilitiesOpen
+            ? 'page-mode'
+            : items.length === 0
+              ? 'empty'
+              : ''
         }`}
       >
         {automationOpen ? (
@@ -5654,15 +5695,18 @@ export default function App() {
           </div>
         </footer>
 
-        {terminalOpen ? (
+          </>
+        )}
+        {terminalMounted ? (
           <TerminalDock
             cwd={activeCwd}
             threadId={threadId}
+            visible={
+              terminalOpen && !automationOpen && !searchOpen && !capabilitiesOpen
+            }
             onClose={() => setTerminalOpen(false)}
           />
         ) : null}
-          </>
-        )}
       </main>
 
       {railOpen ? (

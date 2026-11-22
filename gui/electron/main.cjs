@@ -1706,6 +1706,7 @@ function killAllTerminals() {
 
 handleIpc('terminal:start', async (_event, payload) => {
   if (!pty) throw new Error('终端组件不可用（node-pty 未加载）');
+  if (terminals.size >= 8) throw new Error('终端数量已达上限（8 个）');
   const cwd = payload?.cwd;
   if (typeof cwd !== 'string' || !cwd) throw new Error('缺少工作目录');
   const cwdReal = await realpathNearest(path.resolve(cwd));

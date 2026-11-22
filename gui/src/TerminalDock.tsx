@@ -38,10 +38,12 @@ const THEME = {
 export function TerminalDock({
   cwd,
   threadId,
+  visible,
   onClose,
 }: {
   cwd: string;
   threadId?: string | null;
+  visible: boolean;
   onClose: () => void;
 }) {
   const [tabs, setTabs] = useState<Tab[]>([]);
@@ -158,10 +160,14 @@ export function TerminalDock({
   );
 
   useEffect(() => {
-    if (initializedRef.current) return;
-    initializedRef.current = true;
-    addTab();
-  }, [addTab]);
+    if (!visible) return;
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      addTab();
+      return;
+    }
+    if (tabs.length === 0) addTab();
+  }, [addTab, tabs.length, visible]);
 
   useEffect(() => {
     const offData = window.codex.onTerminalData(({ id, data }) => {
@@ -224,7 +230,15 @@ export function TerminalDock({
   );
 
   useEffect(() => {
-    if (activeKey == null) return;
+    if (visible) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.closest('.terminal-dock')) {
+      active.blur();
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible || activeKey == null) return;
     const entry = xtermsRef.current.get(activeKey);
     if (!entry) return;
     const timer = setTimeout(() => {
@@ -242,7 +256,7 @@ export function TerminalDock({
       }
     }, 30);
     return () => clearTimeout(timer);
-  }, [activeKey, tabs.length]);
+  }, [activeKey, tabs.length, visible]);
 
   useEffect(() => {
     const host = activeKey == null ? null : hostsRef.current.get(activeKey);
@@ -329,7 +343,7 @@ export function TerminalDock({
   };
 
   return (
-    <section className="terminal-dock">
+    <section className="terminal-dock" style={visible ? undefined : { display: 'none' }}>
       <header className="terminal-tabs">
         <div className="terminal-tab-list">
           {tabs.map((tab) => (
