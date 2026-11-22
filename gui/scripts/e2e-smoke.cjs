@@ -1,6 +1,6 @@
 const http = require('node:http');
 
-const port = Number(process.argv[2] || 9222);
+const port = Number(process.argv[2] || 9333);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function getJson(url) {

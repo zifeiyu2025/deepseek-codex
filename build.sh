@@ -9,7 +9,13 @@ export CARGO_NET_GIT_FETCH_WITH_CLI="${CARGO_NET_GIT_FETCH_WITH_CLI:-true}"
 export RUSTUP_DIST_SERVER="${RUSTUP_DIST_SERVER:-https://rsproxy.cn}"
 export RUSTUP_UPDATE_ROOT="${RUSTUP_UPDATE_ROOT:-https://rsproxy.cn/rustup}"
 
-trap 'echo "BUILD_EXIT:$?"' EXIT
+TMP_ENGINE=""
+cleanup() {
+  status=$?
+  [ -n "$TMP_ENGINE" ] && rm -f "$TMP_ENGINE"
+  echo "BUILD_EXIT:$status"
+}
+trap cleanup EXIT
 
 echo "BUILD_START $(date -u +%FT%TZ)"
 cd "$ROOT/codex-src/codex-rs"
@@ -27,6 +33,26 @@ echo "V8_CHECK_OK"
 cargo build --release -p codex-cli --bin codex
 echo "CARGO_BUILD_OK"
 
+ENGINE_SRC="$CARGO_TARGET_DIR/release/codex.exe"
+ENGINE_DST="$ROOT/dist/codex.exe"
+if [ ! -f "$ENGINE_SRC" ]; then
+  echo "ENGINE_MISSING:$ENGINE_SRC" >&2
+  exit 1
+fi
+if tasklist 2>/dev/null | tr -d '\r' | grep -qi '^codex\.exe'; then
+  echo "ENGINE_IN_USE: stop the running desktop app before replacing $ENGINE_DST" >&2
+  exit 1
+fi
 mkdir -p "$ROOT/dist"
-cp "$CARGO_TARGET_DIR/release/codex.exe" "$ROOT/dist/codex.exe"
+TMP_ENGINE="$ENGINE_DST.tmp.$$"
+cp "$ENGINE_SRC" "$TMP_ENGINE"
+SRC_SHA=$(sha256sum "$ENGINE_SRC" | cut -d' ' -f1)
+TMP_SHA=$(sha256sum "$TMP_ENGINE" | cut -d' ' -f1)
+if [ "$SRC_SHA" != "$TMP_SHA" ]; then
+  echo "ENGINE_COPY_HASH_MISMATCH" >&2
+  exit 1
+fi
+mv -f "$TMP_ENGINE" "$ENGINE_DST"
+TMP_ENGINE=""
+echo "ENGINE_SHA256:$SRC_SHA"
 echo "BUILD_DONE"

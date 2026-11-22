@@ -8,6 +8,8 @@
   "main": "electron/main.cjs",
   "scripts": {
     "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && npm run build",
     "start": "npm run build && electron .",
     "app": "electron .",
     "test:smoke": "node scripts/e2e-smoke.cjs",
