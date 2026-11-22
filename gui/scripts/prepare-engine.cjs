@@ -1,7 +1,6 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 
 const target = path.resolve(__dirname, '..', 'codex.exe');
 const candidates = [
@@ -23,18 +22,13 @@ if (!source) {
   process.exit(1);
 }
 
-if (process.platform === 'win32') {
+if (fs.existsSync(target)) {
   try {
-    const tasks = execFileSync('tasklist', ['/FI', 'IMAGENAME eq codex.exe', '/NH'], {
-      encoding: 'utf8',
-      windowsHide: true,
-    });
-    if (/^codex\.exe/im.test(tasks)) {
-      console.error('codex.exe is running. Stop the desktop app before packaging.');
-      process.exit(1);
-    }
+    const fd = fs.openSync(target, 'a');
+    fs.closeSync(fd);
   } catch {
-    /* tasklist unavailable; atomic replace below still fails safely */
+    console.error('codex.exe is locked by a running app. Stop it before packaging.');
+    process.exit(1);
   }
 }
 

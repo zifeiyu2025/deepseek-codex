@@ -1,6 +1,6 @@
 {
   "name": "deepseek-codex-gui",
-  "version": "0.44.0",
+  "version": "0.45.0",
   "private": true,
   "description": "Independent desktop GUI for the locally built Codex app-server, defaulting to DeepSeek.",
   "author": "local",
@@ -9,10 +9,12 @@
   "scripts": {
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && npm run build",
+    "verify": "npm run typecheck && npm run build && npm run test:smoke:auto",
     "start": "npm run build && electron .",
     "app": "electron .",
     "test:smoke": "node scripts/e2e-smoke.cjs",
+    "test:smoke:auto": "node scripts/run-smoke.cjs",
+    "clean:release": "node scripts/clean-release.cjs",
     "dist:win": "npm run build && node scripts/prepare-engine.cjs && electron-builder --win portable"
   },
   "build": {
@@ -26,7 +28,13 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/node-pty/prebuilds/darwin-*/**/*",
+      "!node_modules/node-pty/prebuilds/win32-arm64/**/*",
+      "!node_modules/node-pty/deps/**/*",
+      "!node_modules/node-pty/src/**/*",
+      "!node_modules/node-pty/third_party/**/*",
+      "!node_modules/node-pty/build/**/*"
     ],
     "extraResources": [
       {
@@ -35,7 +43,7 @@
       }
     ],
     "asarUnpack": [
-      "node_modules/node-pty/**/*"
+      "node_modules/node-pty/prebuilds/win32-x64/**/*"
     ],
     "win": {
       "icon": "build/icon.png",
@@ -53,25 +61,25 @@
     }
   },
   "dependencies": {
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",
     "@fontsource/ibm-plex-sans": "^5.3.0",
     "@fontsource/instrument-serif": "^5.3.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
     "lucide-react": "^1.77.0",
-    "node-pty": "^1.1.0",
     "prism-react-renderer": "^2.4.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
-  },
-  "devDependencies": {
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.3.0",
-    "electron": "^45.4.1",
-    "electron-builder": "^26.18.0",
+    "remark-gfm": "^4.0.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.8"
   },

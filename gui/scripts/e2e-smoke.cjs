@@ -60,6 +60,9 @@ function getJson(url) {
   }
 
   await evaluate(
+    "(()=>{const overlay=[...document.querySelectorAll('.key-overlay')].find(e=>e.innerText.includes('DEEPSEEK ACCESS')); const later=overlay?[...overlay.querySelectorAll('button')].find(b=>b.textContent.trim()==='稍后'):null; if(later) later.click(); return true;})()",
+  );
+  await evaluate(
     "(()=>{const button=document.querySelector('.page-view .page-ghost, .plugins-page .page-ghost'); if(button) button.click(); return true;})()",
   );
   await sleep(300);

@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="D:/MyWorkspace/codex-deepseek"
-export CARGO_TARGET_DIR="$ROOT/build"
-export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
-export GIT_CONFIG_GLOBAL="${GIT_CONFIG_GLOBAL:-$ROOT/.gitconfig}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${ROOT:-$SCRIPT_DIR}"
+CODEX_SRC="$ROOT/codex-src"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/build}"
+export LIBSQLITE3_FLAGS="${LIBSQLITE3_FLAGS:-SQLITE_DISABLE_INTRINSIC}"
 export CARGO_NET_GIT_FETCH_WITH_CLI="${CARGO_NET_GIT_FETCH_WITH_CLI:-true}"
 export RUSTUP_DIST_SERVER="${RUSTUP_DIST_SERVER:-https://rsproxy.cn}"
 export RUSTUP_UPDATE_ROOT="${RUSTUP_UPDATE_ROOT:-https://rsproxy.cn/rustup}"
+export CARGO_PROFILE_RELEASE_DEBUG="${CARGO_PROFILE_RELEASE_DEBUG:-0}"
+export CARGO_PROFILE_RELEASE_STRIP="${CARGO_PROFILE_RELEASE_STRIP:-symbols}"
+
+if [ -n "${CODEX_GIT_CONFIG:-}" ]; then
+  export GIT_CONFIG_GLOBAL="$CODEX_GIT_CONFIG"
+elif [ -f "$ROOT/.gitconfig" ]; then
+  export GIT_CONFIG_GLOBAL="$ROOT/.gitconfig"
+fi
 
 TMP_ENGINE=""
 cleanup() {
@@ -18,7 +27,20 @@ cleanup() {
 trap cleanup EXIT
 
 echo "BUILD_START $(date -u +%FT%TZ)"
-cd "$ROOT/codex-src/codex-rs"
+cd "$CODEX_SRC/codex-rs"
+
+PATCH="$ROOT/patches/remove-v8-local.diff"
+if [ -f "$PATCH" ]; then
+  if git -C "$CODEX_SRC" apply --reverse --check "$PATCH" >/dev/null 2>&1; then
+    echo "PATCH_ALREADY_APPLIED"
+  elif git -C "$CODEX_SRC" apply --check "$PATCH" >/dev/null 2>&1; then
+    git -C "$CODEX_SRC" apply "$PATCH"
+    echo "PATCH_APPLIED"
+  else
+    echo "PATCH_APPLY_FAILED:$PATCH" >&2
+    exit 1
+  fi
+fi
 
 rustup toolchain install 1.99.1 --profile minimal \
   --component clippy --component rustfmt --component rust-src
@@ -30,7 +52,7 @@ if cargo tree -p codex-cli -i v8 2>/dev/null | grep -q '^v8 v'; then
 fi
 echo "V8_CHECK_OK"
 
-cargo build --release -p codex-cli --bin codex
+cargo build --release --locked -p codex-cli --bin codex
 echo "CARGO_BUILD_OK"
 
 ENGINE_SRC="$CARGO_TARGET_DIR/release/codex.exe"
@@ -39,8 +61,8 @@ if [ ! -f "$ENGINE_SRC" ]; then
   echo "ENGINE_MISSING:$ENGINE_SRC" >&2
   exit 1
 fi
-if tasklist 2>/dev/null | tr -d '\r' | grep -qi '^codex\.exe'; then
-  echo "ENGINE_IN_USE: stop the running desktop app before replacing $ENGINE_DST" >&2
+if [ -e "$ENGINE_DST" ] && ! ( : >> "$ENGINE_DST" ) 2>/dev/null; then
+  echo "ENGINE_IN_USE: stop the app that owns $ENGINE_DST" >&2
   exit 1
 fi
 mkdir -p "$ROOT/dist"
@@ -55,4 +77,42 @@ fi
 mv -f "$TMP_ENGINE" "$ENGINE_DST"
 TMP_ENGINE=""
 echo "ENGINE_SHA256:$SRC_SHA"
+
+CODEX_COMMIT=$(git -C "$CODEX_SRC" rev-parse HEAD 2>/dev/null || echo unknown)
+CODEX_DIRTY=$(git -C "$CODEX_SRC" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+PATCH_SHA="none"
+if [ -f "$PATCH" ]; then
+  PATCH_SHA=$(sha256sum "$PATCH" | cut -d' ' -f1)
+fi
+RUSTC_VERSION=$(rustc --version 2>/dev/null || echo unknown)
+CARGO_VERSION=$(cargo --version 2>/dev/null || echo unknown)
+if command -v node >/dev/null 2>&1; then
+  MANIFEST_PATH="$ROOT/dist/engine-manifest.json" \
+  ENGINE_SHA="$SRC_SHA" \
+  CODEX_COMMIT="$CODEX_COMMIT" \
+  CODEX_DIRTY="$CODEX_DIRTY" \
+  PATCH_SHA="$PATCH_SHA" \
+  RUSTC_VERSION="$RUSTC_VERSION" \
+  CARGO_VERSION="$CARGO_VERSION" \
+  ENGINE_SRC="$ENGINE_SRC" \
+  node -e '
+const fs = require("node:fs");
+const manifest = {
+  builtAt: new Date().toISOString(),
+  engineSha256: process.env.ENGINE_SHA,
+  engineSource: process.env.ENGINE_SRC,
+  codexCommit: process.env.CODEX_COMMIT,
+  dirtyFiles: Number(process.env.CODEX_DIRTY || 0),
+  patchSha256: process.env.PATCH_SHA,
+  rustc: process.env.RUSTC_VERSION,
+  cargo: process.env.CARGO_VERSION,
+  profile: {
+    debug: process.env.CARGO_PROFILE_RELEASE_DEBUG,
+    strip: process.env.CARGO_PROFILE_RELEASE_STRIP,
+  },
+};
+fs.writeFileSync(process.env.MANIFEST_PATH, JSON.stringify(manifest, null, 2) + "\n");
+'
+fi
+echo "MANIFEST_OK"
 echo "BUILD_DONE"
