@@ -15,6 +15,7 @@ const { spawn, execFile, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 let pty = null;
 try {
@@ -24,6 +25,7 @@ try {
 }
 
 const ROOT = path.resolve(__dirname, '..');
+const APP_ENTRY_URL = pathToFileURL(path.join(ROOT, 'dist', 'index.html')).href;
 const ALLOWED_METHODS = new Set([
   'thread/start',
   'thread/resume',
@@ -262,6 +264,63 @@ function defaultWorkspace() {
   return os.homedir();
 }
 
+const allowedRoots = new Set();
+function addAllowedRoot(value) {
+  if (typeof value !== 'string' || !value) return;
+  try {
+    allowedRoots.add(fs.realpathSync.native(path.resolve(value)));
+  } catch {
+    /* only existing roots can be trusted */
+  }
+}
+
+function isPathInside(root, target) {
+  const relative = path.relative(root, target);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function assertPathAllowed(target, message = '路径不在允许范围') {
+  if (![...allowedRoots].some((root) => isPathInside(root, target))) {
+    throw new Error(message);
+  }
+}
+
+function collectAllowedRoots(method, result) {
+  if (!result || typeof result !== 'object') return;
+  const add = (value) => addAllowedRoot(value);
+  if (method === 'project/list' || method === 'project/read') {
+    const projects = Array.isArray(result.data)
+      ? result.data
+      : [result.project ?? result];
+    for (const project of projects) {
+      for (const root of project?.roots ?? []) add(root?.path);
+    }
+  }
+  if (method.startsWith('thread/')) {
+    const visit = (thread) => add(thread?.cwd);
+    visit(result.thread);
+    visit(result);
+    if (Array.isArray(result.data)) result.data.forEach(visit);
+  }
+}
+
+const attachmentsDir = path.join(app.getPath('temp'), 'deepseek-codex-attachments');
+const worktreesRoot = path.join(codexHome, 'worktrees');
+try {
+  fs.mkdirSync(attachmentsDir, { recursive: true });
+  fs.mkdirSync(worktreesRoot, { recursive: true });
+} catch {
+  /* ignore */
+}
+addAllowedRoot(codexHome);
+addAllowedRoot(app.getPath('userData'));
+addAllowedRoot(defaultWorkspace());
+addAllowedRoot(worktreesRoot);
+addAllowedRoot(attachmentsDir);
+for (const name of ['Desktop', 'Downloads', 'Pictures']) {
+  addAllowedRoot(path.join(os.homedir(), name));
+}
+
 class RpcClient {
   constructor(processHandle) {
     this.child = processHandle;
@@ -409,6 +468,23 @@ class RpcClient {
       /* engine already gone */
     }
   }
+}
+
+function isTrustedSender(event) {
+  if (!win || event.sender !== win.webContents) return false;
+  const url = event.senderFrame?.url || '';
+  return url.split('#')[0].split('?')[0] === APP_ENTRY_URL;
+}
+
+function assertTrustedSender(event) {
+  if (!isTrustedSender(event)) throw new Error('unauthorized IPC sender');
+}
+
+function handleIpc(channel, listener) {
+  ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedSender(event);
+    return listener(event, ...args);
+  });
 }
 
 function broadcastStatus() {
@@ -757,7 +833,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       webviewTag: true,
     },
   });
@@ -778,10 +854,17 @@ function createWindow() {
     event.preventDefault();
     openExternalUrl(url);
   });
+  win.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
+  win.webContents.session.setPermissionCheckHandler(() => false);
   win.webContents.on('will-attach-webview', (event, webPreferences, params) => {
     delete webPreferences.preload;
     webPreferences.nodeIntegration = false;
     webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    webPreferences.webSecurity = true;
+    webPreferences.allowRunningInsecureContent = false;
     if (!/^https?:\/\//i.test(params.src || '')) event.preventDefault();
   });
   win.webContents.on('did-attach-webview', (_event, contents) => {
@@ -789,6 +872,13 @@ function createWindow() {
       openExternalUrl(url);
       return { action: 'deny' };
     });
+    contents.on('will-navigate', (event, url) => {
+      if (!/^https?:\/\//i.test(url)) event.preventDefault();
+    });
+    contents.session.setPermissionRequestHandler((_webContents, _permission, callback) => {
+      callback(false);
+    });
+    contents.session.setPermissionCheckHandler(() => false);
   });
   win.webContents.on('did-finish-load', () => {
     killAllTerminals();
@@ -810,24 +900,24 @@ function createWindow() {
   });
 }
 
-ipcMain.handle('window:minimize', () => {
+handleIpc('window:minimize', () => {
   win?.minimize();
 });
 
-ipcMain.handle('window:toggle-maximize', () => {
+handleIpc('window:toggle-maximize', () => {
   if (!win) return false;
   if (win.isMaximized()) win.unmaximize();
   else win.maximize();
   return win.isMaximized();
 });
 
-ipcMain.handle('window:close', () => {
+handleIpc('window:close', () => {
   win?.close();
 });
 
-ipcMain.handle('window:is-maximized', () => Boolean(win?.isMaximized()));
+handleIpc('window:is-maximized', () => Boolean(win?.isMaximized()));
 
-ipcMain.handle('app:get-config', () => {
+handleIpc('app:get-config', () => {
   const defaults = loadConfigDefaults();
   return {
     appVersion: app.getVersion(),
@@ -844,32 +934,38 @@ ipcMain.handle('app:get-config', () => {
   };
 });
 
-ipcMain.handle('app:pick-folder', async () => {
+handleIpc('app:pick-folder', async () => {
   if (!win) return null;
   const result = await dialog.showOpenDialog(win, {
     properties: ['openDirectory', 'createDirectory'],
   });
-  return result.canceled ? null : result.filePaths[0];
+  if (result.canceled || !result.filePaths[0]) return null;
+  addAllowedRoot(result.filePaths[0]);
+  return result.filePaths[0];
 });
 
-ipcMain.handle('app:pick-files', async () => {
+handleIpc('app:pick-files', async () => {
   if (!win) return [];
   const result = await dialog.showOpenDialog(win, {
     properties: ['openFile', 'multiSelections'],
   });
-  return result.canceled ? [] : result.filePaths;
+  if (result.canceled) return [];
+  for (const file of result.filePaths) addAllowedRoot(path.dirname(file));
+  return result.filePaths;
 });
 
-ipcMain.handle('app:pick-images', async () => {
+handleIpc('app:pick-images', async () => {
   if (!win) return [];
   const result = await dialog.showOpenDialog(win, {
     properties: ['openFile', 'multiSelections'],
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
   });
-  return result.canceled ? [] : result.filePaths;
+  if (result.canceled) return [];
+  for (const file of result.filePaths) addAllowedRoot(path.dirname(file));
+  return result.filePaths;
 });
 
-ipcMain.handle('app:save-pasted-image', async () => {
+handleIpc('app:save-pasted-image', async () => {
   const items = await clipboard.read();
   for (const item of items) {
     const type = item.types.find((entry) => entry.startsWith('image/'));
@@ -908,14 +1004,27 @@ function runGit(args, cwd) {
   });
 }
 
-ipcMain.handle('app:create-worktree', async (_event, repoPath) => {
-  const source = repoPath || os.homedir();
+function assertCodexBranch(branch) {
+  if (
+    !branch ||
+    branch.startsWith('-') ||
+    branch.includes('..') ||
+    !/^codex\/[A-Za-z0-9._/-]+$/.test(branch)
+  ) {
+    throw new Error('非法的 worktree 分支');
+  }
+}
+
+handleIpc('app:create-worktree', async (_event, repoPath) => {
+  const source = await realpathNearest(path.resolve(repoPath || defaultWorkspace()));
+  assertPathAllowed(source, '仓库路径不在允许范围');
   const repoRoot = await runGit(['rev-parse', '--show-toplevel'], source);
+  addAllowedRoot(repoRoot);
   const repoName = path.basename(repoRoot).replace(/[^A-Za-z0-9._-]/g, '-');
   const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
   const suffix = Math.random().toString(16).slice(2, 8);
   const branch = `codex/${stamp}-${suffix}`;
-  const worktreeRoot = path.join(os.homedir(), '.codex', 'worktrees', `${repoName}-${stamp}-${suffix}`);
+  const worktreeRoot = path.join(worktreesRoot, `${repoName}-${stamp}-${suffix}`);
   fs.mkdirSync(path.dirname(worktreeRoot), { recursive: true });
   try {
     await runGit(['worktree', 'add', '-b', branch, worktreeRoot, 'HEAD'], repoRoot);
@@ -930,20 +1039,23 @@ ipcMain.handle('app:create-worktree', async (_event, repoPath) => {
   return { repoRoot, path: worktreeRoot, branch };
 });
 
-ipcMain.handle('app:worktree-apply', async (_event, payload) => {
+handleIpc('app:worktree-apply', async (_event, payload) => {
   const repoRoot = payload?.repoRoot;
   const worktreePath = payload?.worktreePath;
   if (!repoRoot || !worktreePath) throw new Error('缺少 worktree 信息');
-  const status = await runGit(['status', '--porcelain'], repoRoot);
+  const repoReal = await realpathNearest(path.resolve(repoRoot));
+  assertPathAllowed(repoReal, '仓库路径不在允许范围');
+  const worktreeReal = await resolveWithinReal(worktreesRoot, worktreePath);
+  const status = await runGit(['status', '--porcelain'], repoReal);
   if (status.trim()) throw new Error('主仓库有未提交变更，请先提交或清理后再应用');
-  await runGit(['add', '-A'], worktreePath);
-  const diff = await runGit(['diff', '--cached', 'HEAD', '--binary'], worktreePath);
+  await runGit(['add', '-A'], worktreeReal);
+  const diff = await runGit(['diff', '--cached', 'HEAD', '--binary'], worktreeReal);
   if (!diff.trim()) return { applied: false, message: '没有可应用的变更' };
   const patchPath = path.join(os.tmpdir(), `codex-worktree-${Date.now()}.patch`);
   fs.writeFileSync(patchPath, diff.endsWith('\n') ? diff : `${diff}\n`);
   try {
-    await runGit(['apply', '--check', '--whitespace=nowarn', patchPath], repoRoot);
-    await runGit(['apply', '--whitespace=nowarn', patchPath], repoRoot);
+    await runGit(['apply', '--check', '--whitespace=nowarn', patchPath], repoReal);
+    await runGit(['apply', '--whitespace=nowarn', patchPath], repoReal);
     return { applied: true, message: '变更已应用到主仓库工作区（未提交）' };
   } finally {
     try {
@@ -954,15 +1066,19 @@ ipcMain.handle('app:worktree-apply', async (_event, payload) => {
   }
 });
 
-ipcMain.handle('app:worktree-remove', async (_event, payload) => {
+handleIpc('app:worktree-remove', async (_event, payload) => {
   const repoRoot = payload?.repoRoot;
   const worktreePath = payload?.worktreePath;
   const branch = payload?.branch;
   if (!repoRoot || !worktreePath) throw new Error('缺少 worktree 信息');
-  await runGit(['worktree', 'remove', '--force', worktreePath], repoRoot);
+  const repoReal = await realpathNearest(path.resolve(repoRoot));
+  assertPathAllowed(repoReal, '仓库路径不在允许范围');
+  const worktreeReal = await resolveWithinReal(worktreesRoot, worktreePath);
+  if (branch) assertCodexBranch(branch);
+  await runGit(['worktree', 'remove', '--force', worktreeReal], repoReal);
   if (branch) {
     try {
-      await runGit(['branch', '-D', branch], repoRoot);
+      await runGit(['branch', '-D', branch], repoReal);
     } catch {
       /* ignore */
     }
@@ -970,8 +1086,9 @@ ipcMain.handle('app:worktree-remove', async (_event, payload) => {
   return { removed: true };
 });
 
-ipcMain.handle('app:image-data-url', async (_event, filePath) => {
-  const extension = path.extname(filePath || '').toLowerCase();
+handleIpc('app:image-data-url', async (_event, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) throw new Error('缺少图片路径');
+  const extension = path.extname(filePath).toLowerCase();
   const mime = {
     '.png': 'image/png',
     '.jpg': 'image/jpeg',
@@ -980,12 +1097,16 @@ ipcMain.handle('app:image-data-url', async (_event, filePath) => {
     '.gif': 'image/gif',
   }[extension];
   if (!mime) throw new Error('不支持的图片格式');
-  const data = await fs.promises.readFile(filePath);
-  if (data.length > 12 * 1024 * 1024) throw new Error('图片超过 12MB');
+  const target = await realpathNearest(path.resolve(filePath));
+  assertPathAllowed(target, '图片路径不在允许范围');
+  const stat = await fs.promises.stat(target);
+  if (!stat.isFile()) throw new Error('不是文件');
+  if (stat.size > 12 * 1024 * 1024) throw new Error('图片超过 12MB');
+  const data = await fs.promises.readFile(target);
   return `data:${mime};base64,${data.toString('base64')}`;
 });
 
-ipcMain.handle('app:notify', (_event, payload) => {
+handleIpc('app:notify', (_event, payload) => {
   if (!win || win.isFocused() || !Notification.isSupported()) return false;
   const title =
     typeof payload?.title === 'string' && payload.title
@@ -1004,32 +1125,38 @@ ipcMain.handle('app:notify', (_event, payload) => {
   return true;
 });
 
-ipcMain.handle('app:copy-text', (_event, text) => {
+handleIpc('app:copy-text', (_event, text) => {
   if (typeof text !== 'string' || !text) return false;
   clipboard.writeText(text);
   return true;
 });
 
-ipcMain.handle('app:show-in-folder', async (_event, targetPath) => {
+handleIpc('app:show-in-folder', async (_event, targetPath) => {
   if (typeof targetPath !== 'string' || !targetPath) return false;
-  shell.showItemInFolder(targetPath);
+  const target = await realpathNearest(path.resolve(targetPath));
+  assertPathAllowed(target, '路径不在允许范围');
+  shell.showItemInFolder(target);
   return true;
 });
 
-ipcMain.handle('app:open-path', async (_event, targetPath) => {
+handleIpc('app:open-path', async (_event, targetPath) => {
   if (typeof targetPath !== 'string' || !targetPath) return 'invalid path';
-  return shell.openPath(targetPath);
+  const target = await realpathNearest(path.resolve(targetPath));
+  assertPathAllowed(target, '路径不在允许范围');
+  return shell.openPath(target);
 });
 
-ipcMain.handle('app:restart-engine', async () => {
+handleIpc('app:restart-engine', async () => {
   await restartEngine();
   return true;
 });
 
-ipcMain.handle('app:git-info', async (_event, targetPath) => {
+handleIpc('app:git-info', async (_event, targetPath) => {
   if (typeof targetPath !== 'string' || !targetPath) return { repo: false };
   try {
-    const root = await runGit(['rev-parse', '--show-toplevel'], targetPath);
+    const source = await realpathNearest(path.resolve(targetPath));
+    assertPathAllowed(source, '仓库路径不在允许范围');
+    const root = await runGit(['rev-parse', '--show-toplevel'], source);
     const branch = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], targetPath);
     let changed = 0;
     try {
@@ -1115,7 +1242,7 @@ function parsePatchFiles(diff) {
 }
 
 async function makeUntrackedDiff(root, relPath) {
-  const target = resolveWithin(root, relPath);
+  const target = await resolveWithinReal(root, relPath);
   const stat = await fs.promises.stat(target);
   if (!stat.isFile()) return '';
   if (stat.size > 512 * 1024) {
@@ -1164,18 +1291,22 @@ function assertGitPaths(paths) {
 
 async function gitRootFor(cwd) {
   if (typeof cwd !== 'string' || !cwd) throw new Error('缺少工作目录');
-  return runGit(['rev-parse', '--show-toplevel'], cwd);
+  const source = await realpathNearest(path.resolve(cwd));
+  assertPathAllowed(source, '仓库路径不在允许范围');
+  return runGit(['rev-parse', '--show-toplevel'], source);
 }
 
-ipcMain.handle('app:git-review', async (_event, payload) => {
+handleIpc('app:git-review', async (_event, payload) => {
   const cwd = payload?.cwd;
   const scope =
     payload?.scope === 'staged' || payload?.scope === 'branch' ? payload.scope : 'unstaged';
   if (typeof cwd !== 'string' || !cwd) throw new Error('缺少工作目录');
+  const source = await realpathNearest(path.resolve(cwd));
+  assertPathAllowed(source, '仓库路径不在允许范围');
   let repoRoot;
   let branch = '';
   try {
-    repoRoot = await runGit(['rev-parse', '--show-toplevel'], cwd);
+    repoRoot = await runGit(['rev-parse', '--show-toplevel'], source);
     try {
       branch = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], repoRoot);
     } catch {
@@ -1188,6 +1319,9 @@ ipcMain.handle('app:git-review', async (_event, payload) => {
     if (scope === 'branch') {
       let base =
         typeof payload?.base === 'string' && payload.base.trim() ? payload.base.trim() : '';
+      if (base && (base.startsWith('-') || !/^[A-Za-z0-9._/-]+$/.test(base) || base.includes('..'))) {
+        throw new Error('非法基线分支');
+      }
       if (!base) {
         for (const candidate of ['main', 'master', 'origin/main', 'origin/master']) {
           try {
@@ -1312,26 +1446,29 @@ ipcMain.handle('app:git-review', async (_event, payload) => {
   }
 });
 
-ipcMain.handle('app:git-stage', async (_event, payload) => {
+handleIpc('app:git-stage', async (_event, payload) => {
   assertGitPaths(payload?.paths);
   const root = await gitRootFor(payload?.cwd);
   await runGit(['add', '--', ...payload.paths], root);
   return { ok: true };
 });
 
-ipcMain.handle('app:git-unstage', async (_event, payload) => {
+handleIpc('app:git-unstage', async (_event, payload) => {
   assertGitPaths(payload?.paths);
   const root = await gitRootFor(payload?.cwd);
   await runGit(['restore', '--staged', '--', ...payload.paths], root);
   return { ok: true };
 });
 
-ipcMain.handle('app:git-discard', async (_event, payload) => {
+handleIpc('app:git-discard', async (_event, payload) => {
   assertGitPaths(payload?.paths);
   const root = await gitRootFor(payload?.cwd);
   if (payload?.untracked) {
     for (const relPath of payload.paths) {
-      await fs.promises.rm(resolveWithin(root, relPath), { recursive: true, force: true });
+      await fs.promises.rm(await resolveWithinReal(root, relPath), {
+        recursive: true,
+        force: true,
+      });
     }
   } else {
     await runGit(['restore', '--worktree', '--', ...payload.paths], root);
@@ -1339,7 +1476,7 @@ ipcMain.handle('app:git-discard', async (_event, payload) => {
   return { ok: true };
 });
 
-ipcMain.handle('app:git-hunk', async (_event, payload) => {
+handleIpc('app:git-hunk', async (_event, payload) => {
   const mode = payload?.mode;
   if (!['stage', 'unstage', 'revert'].includes(mode)) throw new Error('未知的 Diff 操作');
   if (typeof payload?.diff !== 'string' || !payload.diff) throw new Error('缺少 Diff 内容');
@@ -1367,7 +1504,7 @@ ipcMain.handle('app:git-hunk', async (_event, payload) => {
   return { ok: true };
 });
 
-ipcMain.handle('app:git-commit', async (_event, payload) => {
+handleIpc('app:git-commit', async (_event, payload) => {
   const message = String(payload?.message || '').trim();
   if (!message) throw new Error('提交信息不能为空');
   if (message.length > 4000) throw new Error('提交信息过长');
@@ -1376,15 +1513,32 @@ ipcMain.handle('app:git-commit', async (_event, payload) => {
   return { output: output.trim() };
 });
 
-ipcMain.handle('app:git-push', async (_event, payload) => {
+handleIpc('app:git-push', async (_event, payload) => {
   const root = await gitRootFor(payload?.cwd);
   const output = await runGitRaw(['push'], root);
   return { output: output.trim() };
 });
 
-function resolveWithin(root, target) {
-  const rootAbs = path.resolve(root);
-  const targetAbs = path.resolve(rootAbs, target || '.');
+async function realpathNearest(target) {
+  let current = path.resolve(target);
+  const suffix = [];
+  while (true) {
+    try {
+      const real = await fs.promises.realpath(current);
+      return path.join(real, ...suffix.reverse());
+    } catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+      const parent = path.dirname(current);
+      if (parent === current) throw error;
+      suffix.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+async function resolveWithinReal(root, target) {
+  const rootAbs = await realpathNearest(root);
+  const targetAbs = await realpathNearest(path.resolve(rootAbs, target || '.'));
   const relative = path.relative(rootAbs, targetAbs);
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error('路径超出项目目录');
@@ -1392,10 +1546,12 @@ function resolveWithin(root, target) {
   return targetAbs;
 }
 
-ipcMain.handle('app:list-dir', async (_event, payload) => {
+handleIpc('app:list-dir', async (_event, payload) => {
   const root = payload?.root;
   if (typeof root !== 'string' || !root) throw new Error('缺少项目目录');
-  const target = resolveWithin(root, payload?.path || '.');
+  const rootReal = await realpathNearest(path.resolve(root));
+  assertPathAllowed(rootReal, '项目目录不在允许范围');
+  const target = await resolveWithinReal(rootReal, payload?.path || '.');
   const directory = await fs.promises.readdir(target, { withFileTypes: true });
   const entries = directory
     .filter(
@@ -1430,12 +1586,14 @@ const IMAGE_MIME = {
   '.ico': 'image/x-icon',
 };
 
-ipcMain.handle('app:read-file', async (_event, payload) => {
+handleIpc('app:read-file', async (_event, payload) => {
   const root = payload?.root;
   const file = payload?.path;
   if (typeof root !== 'string' || !root) throw new Error('缺少项目目录');
   if (typeof file !== 'string' || !file) throw new Error('缺少文件路径');
-  const target = resolveWithin(root, file);
+  const rootReal = await realpathNearest(path.resolve(root));
+  assertPathAllowed(rootReal, '项目目录不在允许范围');
+  const target = await resolveWithinReal(rootReal, file);
   const stat = await fs.promises.stat(target);
   if (!stat.isFile()) throw new Error('不是文件');
   const extension = path.extname(target).toLowerCase();
@@ -1473,7 +1631,7 @@ ipcMain.handle('app:read-file', async (_event, payload) => {
   };
 });
 
-ipcMain.handle('app:open-external', async (_event, url) => {
+handleIpc('app:open-external', async (_event, url) => {
   if (typeof url !== 'string' || !url) return false;
   let parsed;
   try {
@@ -1508,15 +1666,19 @@ function killAllTerminals() {
   terminals.clear();
 }
 
-ipcMain.handle('terminal:start', async (_event, payload) => {
+handleIpc('terminal:start', async (_event, payload) => {
   if (!pty) throw new Error('终端组件不可用（node-pty 未加载）');
   const cwd = payload?.cwd;
   if (typeof cwd !== 'string' || !cwd) throw new Error('缺少工作目录');
-  const stat = await fs.promises.stat(cwd);
+  const cwdReal = await realpathNearest(path.resolve(cwd));
+  assertPathAllowed(cwdReal, '工作目录不在允许范围');
+  const stat = await fs.promises.stat(cwdReal);
   if (!stat.isDirectory()) throw new Error('工作目录无效');
   const id = `term-${++terminalSeq}`;
   const cols = Math.max(20, Math.min(400, Number(payload?.cols) || 120));
   const rows = Math.max(5, Math.min(200, Number(payload?.rows) || 30));
+  const terminalEnv = { ...process.env, TERM: 'xterm-256color' };
+  delete terminalEnv.DEEPSEEK_API_KEY;
   const session = pty.spawn(
     process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || 'bash',
     process.platform === 'win32' ? ['-NoLogo', '-NoProfile'] : [],
@@ -1524,8 +1686,8 @@ ipcMain.handle('terminal:start', async (_event, payload) => {
       name: 'xterm-256color',
       cols,
       rows,
-      cwd,
-      env: { ...process.env, TERM: 'xterm-256color' },
+      cwd: cwdReal,
+      env: terminalEnv,
       useConpty: true,
       useConptyDll: process.platform === 'win32',
     },
@@ -1542,7 +1704,7 @@ ipcMain.handle('terminal:start', async (_event, payload) => {
   return { id, cwd };
 });
 
-ipcMain.handle('terminal:input', (_event, payload) => {
+handleIpc('terminal:input', (_event, payload) => {
   const entry = terminals.get(payload?.id);
   if (!entry) throw new Error('终端未运行');
   const data = typeof payload?.data === 'string' ? payload.data : '';
@@ -1552,7 +1714,7 @@ ipcMain.handle('terminal:input', (_event, payload) => {
   return true;
 });
 
-ipcMain.handle('terminal:resize', (_event, payload) => {
+handleIpc('terminal:resize', (_event, payload) => {
   const entry = terminals.get(payload?.id);
   if (!entry) return false;
   const cols = Math.max(20, Math.min(400, Number(payload?.cols) || 120));
@@ -1565,7 +1727,7 @@ ipcMain.handle('terminal:resize', (_event, payload) => {
   return true;
 });
 
-ipcMain.handle('terminal:stop', (_event, id) => {
+handleIpc('terminal:stop', (_event, id) => {
   const entry = terminals.get(id);
   if (!entry) return false;
   terminals.delete(id);
@@ -1573,7 +1735,7 @@ ipcMain.handle('terminal:stop', (_event, id) => {
   return true;
 });
 
-ipcMain.handle('rpc:request', async (_event, method, params) => {
+handleIpc('rpc:request', async (_event, method, params) => {
   if (!rpc || !online) {
     throw new Error(lastError || 'app-server 未连接');
   }
@@ -1581,19 +1743,22 @@ ipcMain.handle('rpc:request', async (_event, method, params) => {
     throw new Error(`不允许的方法：${method}`);
   }
   await initPromise;
-  return rpc.request(method, params);
+  const result = await rpc.request(method, params);
+  collectAllowedRoots(method, result);
+  return result;
 });
 
-ipcMain.on('rpc:respond', (_event, id, result, error) => {
+ipcMain.on('rpc:respond', (event, id, result, error) => {
+  if (!isTrustedSender(event)) return;
   rpc?.respond(id, result, error);
 });
 
-ipcMain.handle('app:api-key-status', () => ({
+handleIpc('app:api-key-status', () => ({
   configured: hasApiKey(),
   env: Boolean(process.env.DEEPSEEK_API_KEY),
 }));
 
-ipcMain.handle('app:set-api-key', async (_event, key) => {
+handleIpc('app:set-api-key', async (_event, key) => {
   const trimmed = typeof key === 'string' ? key.trim() : '';
   if (!trimmed.startsWith('sk-')) throw new Error('API Key 应以 sk- 开头');
   if (!safeStorage.isEncryptionAvailable()) throw new Error('当前系统不支持安全存储');
