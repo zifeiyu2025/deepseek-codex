@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="${ROOT:-$SCRIPT_DIR}"
 CODEX_SRC="$ROOT/codex-src"
+TOOLCHAIN="${CODEX_RUST_TOOLCHAIN:-1.99.1}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/build}"
 export LIBSQLITE3_FLAGS="${LIBSQLITE3_FLAGS:-SQLITE_DISABLE_INTRINSIC}"
 export CARGO_NET_GIT_FETCH_WITH_CLI="${CARGO_NET_GIT_FETCH_WITH_CLI:-true}"
@@ -42,17 +43,19 @@ if [ -f "$PATCH" ]; then
   fi
 fi
 
-rustup toolchain install 1.99.1 --profile minimal \
-  --component clippy --component rustfmt --component rust-src
-echo "TOOLCHAIN_OK"
+if ! rustup toolchain list 2>/dev/null | grep -q "^${TOOLCHAIN}-"; then
+  rustup toolchain install "$TOOLCHAIN" --profile minimal \
+    --component clippy --component rustfmt --component rust-src
+fi
+echo "TOOLCHAIN_OK:$TOOLCHAIN"
 
-if cargo tree -p codex-cli -i v8 2>/dev/null | grep -q '^v8 v'; then
+if cargo +"$TOOLCHAIN" tree -p codex-cli -i v8 2>/dev/null | grep -q '^v8 v'; then
   echo "V8_FOUND_IN_GRAPH"
   exit 1
 fi
 echo "V8_CHECK_OK"
 
-cargo build --release --locked -p codex-cli --bin codex
+cargo +"$TOOLCHAIN" build --release --locked -p codex-cli --bin codex
 echo "CARGO_BUILD_OK"
 
 ENGINE_SRC="$CARGO_TARGET_DIR/release/codex.exe"
@@ -84,8 +87,8 @@ PATCH_SHA="none"
 if [ -f "$PATCH" ]; then
   PATCH_SHA=$(sha256sum "$PATCH" | cut -d' ' -f1)
 fi
-RUSTC_VERSION=$(rustc --version 2>/dev/null || echo unknown)
-CARGO_VERSION=$(cargo --version 2>/dev/null || echo unknown)
+RUSTC_VERSION=$(rustc +"$TOOLCHAIN" --version 2>/dev/null || echo unknown)
+CARGO_VERSION=$(cargo +"$TOOLCHAIN" --version 2>/dev/null || echo unknown)
 if command -v node >/dev/null 2>&1; then
   MANIFEST_PATH="$ROOT/dist/engine-manifest.json" \
   ENGINE_SHA="$SRC_SHA" \
@@ -94,6 +97,7 @@ if command -v node >/dev/null 2>&1; then
   PATCH_SHA="$PATCH_SHA" \
   RUSTC_VERSION="$RUSTC_VERSION" \
   CARGO_VERSION="$CARGO_VERSION" \
+  TOOLCHAIN="$TOOLCHAIN" \
   ENGINE_SRC="$ENGINE_SRC" \
   node -e '
 const fs = require("node:fs");
@@ -106,6 +110,7 @@ const manifest = {
   patchSha256: process.env.PATCH_SHA,
   rustc: process.env.RUSTC_VERSION,
   cargo: process.env.CARGO_VERSION,
+  toolchain: process.env.TOOLCHAIN,
   profile: {
     debug: process.env.CARGO_PROFILE_RELEASE_DEBUG,
     strip: process.env.CARGO_PROFILE_RELEASE_STRIP,
