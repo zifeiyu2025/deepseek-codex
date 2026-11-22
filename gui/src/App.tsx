@@ -259,7 +259,10 @@ function playCompletionChime() {
 }
 
 function friendlyClientError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
+  const raw = (error instanceof Error ? error.message : String(error)).replace(
+    /^Error invoking remote method '[^']+':\s*(Error:\s*)?/,
+    '',
+  );
   if (/already has an active writer/i.test(raw)) {
     return '该会话正被另一个 Codex 客户端（如官方桌面端）占用。请在对方关闭该会话或退出后重试，或切换到其他会话。';
   }
@@ -2193,6 +2196,7 @@ export default function App() {
   const statusRef = useRef<'connecting' | 'ready' | 'offline'>('connecting');
   const automationsRef = useRef<Automation[]>(automations);
   const automationRunsRef = useRef(new Map<string, string>());
+  const automationWatchdogsRef = useRef(new Map<string, number>());
   const mentionSeqRef = useRef(0);
   const worktreeRef = useRef<WorktreeInfo | null>(null);
   const pendingUserRef = useRef<string | null>(null);
@@ -2320,6 +2324,21 @@ export default function App() {
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
   }, [menuThreadId, sectionMenuId]);
+
+  useEffect(() => {
+    if (!threadHeadingMenu && !accountMenuOpen) return;
+    const close = (event: MouseEvent) => {
+      const target = event.target as Element;
+      if (threadHeadingMenu && !target.closest('.thread-heading-actions')) {
+        setThreadHeadingMenu(false);
+      }
+      if (accountMenuOpen && !target.closest('.account-row')) {
+        setAccountMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [threadHeadingMenu, accountMenuOpen]);
 
   useEffect(() => {
     if (!menuThreadId) setMoveThreadId(null);
@@ -2678,40 +2697,51 @@ export default function App() {
     }
   }, []);
 
-  const finishAutomationRun = useCallback((threadId: string | undefined, error?: { message?: string } | null) => {
-    if (!threadId) return;
-    const entry = [...automationRunsRef.current.entries()].find(([, id]) => id === threadId);
-    if (!entry) return;
-    const [automationId] = entry;
-    automationRunsRef.current.delete(automationId);
-    const now = Date.now() / 1000;
-    setAutomations((list) =>
-      list.map((automation) =>
-        automation.id === automationId
-          ? {
-              ...automation,
-              lastStatus: error?.message ? 'error' : 'ok',
-              lastError: error?.message,
-              lastRunAt: now,
-              runs: [
-                {
-                  at: now,
-                  status: (error?.message ? 'error' : 'ok') as 'ok' | 'error',
-                  error: error?.message,
-                },
-                ...(automation.runs || []),
-              ].slice(0, 10),
-              nextRunAt: automation.intervalMinutes
-                ? now + automation.intervalMinutes * 60
-                : undefined,
-            }
-          : automation,
-      ),
-    );
-    setNotice(
-      error?.message ? `自动化执行失败：${error.message}` : '自动化已执行完成',
-    );
+  const clearAutomationWatchdog = useCallback((automationId: string) => {
+    const timer = automationWatchdogsRef.current.get(automationId);
+    if (timer) {
+      window.clearTimeout(timer);
+      automationWatchdogsRef.current.delete(automationId);
+    }
   }, []);
+
+  const finishAutomationRun = useCallback(
+    (threadId: string | undefined, error?: { message?: string } | null) => {
+      if (!threadId) return;
+      const entry = [...automationRunsRef.current.entries()].find(([, id]) => id === threadId);
+      if (!entry) return;
+      const [automationId] = entry;
+      automationRunsRef.current.delete(automationId);
+      clearAutomationWatchdog(automationId);
+      const message = error?.message ? friendlyClientError(error.message) : undefined;
+      const now = Date.now() / 1000;
+      setAutomations((list) =>
+        list.map((automation) =>
+          automation.id === automationId
+            ? {
+                ...automation,
+                lastStatus: message ? 'error' : 'ok',
+                lastError: message,
+                lastRunAt: now,
+                runs: [
+                  {
+                    at: now,
+                    status: (message ? 'error' : 'ok') as 'ok' | 'error',
+                    error: message,
+                  },
+                  ...(automation.runs || []),
+                ].slice(0, 10),
+                nextRunAt: automation.intervalMinutes
+                  ? now + automation.intervalMinutes * 60
+                  : undefined,
+              }
+            : automation,
+        ),
+      );
+      setNotice(message ? `自动化执行失败：${message}` : '自动化已执行完成');
+    },
+    [clearAutomationWatchdog],
+  );
 
   const runAutomation = useCallback(
     async (automation: Automation, manual = false) => {
@@ -2726,6 +2756,34 @@ export default function App() {
       }
       const now = Date.now() / 1000;
       automationRunsRef.current.set(automation.id, '');
+      clearAutomationWatchdog(automation.id);
+      const watchdog = window.setTimeout(
+        () => {
+          const activeThread = automationRunsRef.current.get(automation.id);
+          if (!activeThread) {
+            automationRunsRef.current.delete(automation.id);
+            setAutomations((list) =>
+              list.map((entry) =>
+                entry.id === automation.id
+                  ? {
+                      ...entry,
+                      lastStatus: 'error',
+                      lastError: '自动化启动超时',
+                      lastRunAt: Date.now() / 1000,
+                      nextRunAt: entry.intervalMinutes
+                        ? Date.now() / 1000 + Math.max(300, entry.intervalMinutes * 60)
+                        : undefined,
+                    }
+                  : entry,
+              ),
+            );
+            return;
+          }
+          finishAutomationRun(activeThread, { message: '自动化执行超时' });
+        },
+        30 * 60 * 1000,
+      );
+      automationWatchdogsRef.current.set(automation.id, watchdog);
       setAutomations((list) =>
         list.map((entry) =>
           entry.id === automation.id
@@ -2771,22 +2829,27 @@ export default function App() {
         refreshThreads();
       } catch (runError: any) {
         automationRunsRef.current.delete(automation.id);
+        clearAutomationWatchdog(automation.id);
+        const message = friendlyClientError(runError);
         setAutomations((list) =>
           list.map((entry) =>
             entry.id === automation.id
               ? {
                   ...entry,
                   lastStatus: 'error',
-                  lastError: runError?.message || String(runError),
+                  lastError: message,
                   lastRunAt: now,
+                  nextRunAt: entry.intervalMinutes
+                    ? now + Math.max(300, entry.intervalMinutes * 60)
+                    : undefined,
                 }
               : entry,
           ),
         );
-        if (manual) setError(runError?.message || String(runError));
+        if (manual) setError(message);
       }
     },
-    [config, refreshThreads],
+    [clearAutomationWatchdog, config, finishAutomationRun, refreshThreads],
   );
 
   useEffect(() => {
@@ -2804,6 +2867,28 @@ export default function App() {
     }, 30000);
     return () => clearInterval(timer);
   }, [runAutomation]);
+
+  useEffect(() => {
+    if (status === 'ready' || automationRunsRef.current.size === 0) return;
+    for (const [automationId, activeThread] of [...automationRunsRef.current.entries()]) {
+      if (activeThread) {
+        finishAutomationRun(activeThread, { message: '引擎离线，自动化已中断' });
+      } else {
+        automationRunsRef.current.delete(automationId);
+        clearAutomationWatchdog(automationId);
+      }
+    }
+  }, [clearAutomationWatchdog, finishAutomationRun, status]);
+
+  useEffect(
+    () => () => {
+      for (const timer of automationWatchdogsRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      automationWatchdogsRef.current.clear();
+    },
+    [],
+  );
 
   const saveAutomation = useCallback(() => {
     const name = automationForm.name.trim();
@@ -3194,14 +3279,13 @@ export default function App() {
     setPendingInput(null);
   }, [pendingInput]);
 
-  const saveSettings = useCallback((next: RuntimeSettings) => {
+  const applySettings = useCallback((next: RuntimeSettings) => {
     setSettings(next);
     try {
       localStorage.setItem('deepseek-codex.settings', JSON.stringify(next));
     } catch {
       /* ignore */
     }
-    setSettingsOpen(false);
   }, []);
 
   const newSession = useCallback(() => {
@@ -3813,7 +3897,7 @@ export default function App() {
         if (threadRef.current === thread.id) newSession();
         refreshThreads();
       } catch (deleteError: any) {
-        setError(deleteError?.message || String(deleteError));
+        setError(friendlyClientError(deleteError));
       }
     },
     [newSession, refreshThreads],
@@ -3826,7 +3910,7 @@ export default function App() {
         if (threadRef.current === thread.id) newSession();
         refreshThreads();
       } catch (archiveError: any) {
-        setError(archiveError?.message || String(archiveError));
+        setError(friendlyClientError(archiveError));
       }
     },
     [newSession, refreshThreads],
@@ -3838,7 +3922,7 @@ export default function App() {
         await window.codex.request('thread/unarchive', { threadId: thread.id });
         refreshThreads();
       } catch (archiveError: any) {
-        setError(archiveError?.message || String(archiveError));
+        setError(friendlyClientError(archiveError));
       }
     },
     [refreshThreads],
@@ -3856,7 +3940,7 @@ export default function App() {
         refreshThreads();
         await resumeThread({ id: forked.id, preview: forked.preview || '分叉会话' });
       } catch (forkError: any) {
-        setError(forkError?.message || String(forkError));
+        setError(friendlyClientError(forkError));
       }
     },
     [refreshThreads, resumeThread],
@@ -3875,7 +3959,7 @@ export default function App() {
       await resumeThread({ id: activeThread, preview: '' }, false);
       setNotice('已回退最后一轮');
     } catch (revertError: any) {
-      setError(revertError?.message || String(revertError));
+      setError(friendlyClientError(revertError));
     }
   }, [resumeThread]);
 
@@ -3890,7 +3974,7 @@ export default function App() {
         setMenuThreadId(null);
         refreshThreads();
       } catch (pinError: any) {
-        setError(pinError?.message || String(pinError));
+        setError(friendlyClientError(pinError));
       }
     },
     [pinnedSectionId, refreshThreads],
@@ -3910,7 +3994,7 @@ export default function App() {
       }
       setMenuThreadId(null);
     } catch (unreadError: any) {
-      setError(unreadError?.message || String(unreadError));
+      setError(friendlyClientError(unreadError));
     }
   }, []);
 
@@ -3925,7 +4009,7 @@ export default function App() {
         setMenuThreadId(null);
         refreshThreads();
       } catch (moveError: any) {
-        setError(moveError?.message || String(moveError));
+        setError(friendlyClientError(moveError));
       }
     },
     [refreshThreads],
@@ -3961,7 +4045,7 @@ export default function App() {
         refreshSections();
         refreshThreads();
       } catch (sectionError: any) {
-        setError(sectionError?.message || String(sectionError));
+        setError(friendlyClientError(sectionError));
       }
     },
     [refreshSections, refreshThreads],
@@ -3974,7 +4058,7 @@ export default function App() {
       setMenuThreadId(null);
       setError(null);
     } catch (compactError: any) {
-      setError(compactError?.message || String(compactError));
+      setError(friendlyClientError(compactError));
     }
   }, []);
 
@@ -3993,7 +4077,7 @@ export default function App() {
       setRenameTarget(null);
       setRenameInput('');
     } catch (renameError: any) {
-      setError(renameError?.message || String(renameError));
+      setError(friendlyClientError(renameError));
     }
   }, [renameInput, renameTarget]);
 
@@ -4025,11 +4109,11 @@ export default function App() {
         threadId: threadRef.current,
         turnId: turnIdRef.current,
       });
-    } catch {
-      /* best effort */
-    } finally {
-      setRunning(false);
+    } catch (stopError) {
+      setError(friendlyClientError(stopError));
+      return;
     }
+    setRunning(false);
   }, []);
 
   const startReview = useCallback(
@@ -4068,8 +4152,8 @@ export default function App() {
         setReviewDialogOpen(false);
         openRail('review');
         refreshThreads();
-      } catch (reviewError: any) {
-        setError(reviewError?.message || String(reviewError));
+      } catch (reviewError) {
+        setError(friendlyClientError(reviewError));
       } finally {
         setReviewBusy(false);
       }
@@ -4106,9 +4190,9 @@ export default function App() {
           input: buildTurnInput(text, files),
         });
         setAttachments([]);
-      } catch (steerError: any) {
-        setInput(text);
-        setError(steerError?.message || String(steerError));
+      } catch (steerError) {
+        setInput((previous) => previous || text);
+        setError(friendlyClientError(steerError));
       }
       return;
     }
@@ -4189,9 +4273,12 @@ export default function App() {
       setTurnId(turn?.turn?.id || null);
       setLastTurnId(turn?.turn?.id || null);
       setAttachments([]);
-    } catch (sendError: any) {
+    } catch (sendError) {
       setRunning(false);
       pendingUserRef.current = null;
+      delete itemTimesRef.current[localId];
+      setItems((list) => list.filter((item) => item.id !== localId));
+      setInput((previous) => previous || text);
       setError(friendlyClientError(sendError));
     }
   }, [attachments, buildTurnInput, config, input, preparing, refreshThreads, worktreeMode]);
@@ -4214,15 +4301,18 @@ export default function App() {
       await resumeThread({ id: activeThread, preview: '' }, false);
       setNotice('已回退，正在重新生成…');
       await send(text);
-    } catch (retryError: any) {
-      setError(retryError?.message || String(retryError));
+    } catch (retryError) {
+      setError(friendlyClientError(retryError));
     }
   }, [items, resumeThread, send]);
 
   const fixReviewComments = useCallback(
     (reviewText: string) => {
       if (runningRef.current) return;
-      if (modeRef.current === 'plan') setMode('default');
+      if (modeRef.current === 'plan') {
+        modeRef.current = 'default';
+        setMode('default');
+      }
       void send(`请修复以下代码审查结果中的问题：\n\n${reviewText}`);
     },
     [send],
@@ -4291,9 +4381,9 @@ export default function App() {
       setLastTurnId(turn?.turn?.id || null);
       setMode('default');
       setLiveDiff('');
-    } catch (approveError: any) {
+    } catch (approveError) {
       setRunning(false);
-      setError(approveError?.message || String(approveError));
+      setError(friendlyClientError(approveError));
     }
   }, [planMarkdown]);
 
@@ -4543,10 +4633,7 @@ export default function App() {
 
         <div className="thread-heading">
           <span>{showArchived ? '归档会话' : '最近'}</span>
-          <div
-            className="thread-heading-actions"
-            onMouseLeave={() => setThreadHeadingMenu(false)}
-          >
+          <div className="thread-heading-actions">
             <button
               onClick={(event) => {
                 event.stopPropagation();
@@ -4791,11 +4878,7 @@ export default function App() {
         </div>
 
         <div className="sidebar-foot">
-          <div
-            className="account-row"
-            title={config?.codexHome || ''}
-            onMouseLeave={() => setAccountMenuOpen(false)}
-          >
+          <div className="account-row" title={config?.codexHome || ''}>
             <button
               className="account-main"
               onClick={() => setAccountMenuOpen((previous) => !previous)}
@@ -5406,7 +5489,9 @@ export default function App() {
                       <button
                         onClick={() => {
                           setAttachMenuOpen(false);
-                          setCapabilitiesOpen(true);
+                          setSearchOpen(false);
+                          setAutomationOpen(false);
+                          void openCapabilities();
                         }}
                       >
                         <Boxes size={13} /> 插件
@@ -5502,7 +5587,7 @@ export default function App() {
                           onChange={(event) => {
                             const next =
                               effortOptions[Number(event.target.value)] || settings.effort;
-                            saveSettings({
+                            applySettings({
                               ...settings,
                               effort: next as RuntimeSettings['effort'],
                             });
@@ -5737,7 +5822,7 @@ export default function App() {
             setSettingsOpen(false);
             setKeyDialog(true);
           }}
-          onSave={saveSettings}
+          onSave={applySettings}
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}
