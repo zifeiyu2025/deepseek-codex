@@ -1,6 +1,6 @@
 {
   "name": "deepseek-codex-gui",
-  "version": "0.45.15",
+  "version": "0.45.16",
   "private": true,
   "description": "Independent desktop GUI for the locally built Codex app-server, defaulting to DeepSeek.",
   "author": "local",
