@@ -170,8 +170,19 @@ function getJson(url) {
   await sleep(200);
   check('会话菜单 Esc 关闭', !(await evaluate("!!document.querySelector('.thread-menu')")));
 
+  check(
+    '菜单 aria 状态',
+    (await evaluate(
+      "(()=>{const b=document.querySelector('.account-settings'); return b?.getAttribute('aria-haspopup')==='menu' && b.getAttribute('aria-expanded')==='false';})()",
+    )) === true,
+  );
   await evaluate("document.querySelector('.account-settings')?.click(); true");
   await sleep(200);
+  check(
+    '菜单展开 aria 状态',
+    (await evaluate("document.querySelector('.account-settings')?.getAttribute('aria-expanded')")) ===
+      'true',
+  );
   await evaluate(
     "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); true",
   );

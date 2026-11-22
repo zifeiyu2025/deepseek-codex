@@ -357,6 +357,7 @@ export function TerminalDock({
               <span className={`terminal-tab-state ${tab.status}`} />
               <button
                 className="terminal-tab-close"
+                aria-label="关闭终端"
                 onClick={(event) => {
                   event.stopPropagation();
                   closeTab(tab.key);
@@ -367,7 +368,12 @@ export function TerminalDock({
               </button>
             </div>
           ))}
-          <button className="terminal-tab-add" onClick={addTab} title="新建终端">
+          <button
+            className="terminal-tab-add"
+            onClick={addTab}
+            title="新建终端"
+            aria-label="新建终端"
+          >
             <Plus size={13} />
           </button>
         </div>
@@ -375,12 +381,19 @@ export function TerminalDock({
           className={`terminal-bg-toggle ${showBackground ? 'active' : ''}`}
           onClick={() => setShowBackground((previous) => !previous)}
           title="后台终端"
+          aria-label="后台终端"
+          aria-pressed={showBackground}
         >
           <Activity size={12} />
           <span>后台</span>
           {backgroundTasks.length > 0 ? <em>{backgroundTasks.length}</em> : null}
         </button>
-        <button className="terminal-dock-close" onClick={onClose} title="收起终端">
+        <button
+          className="terminal-dock-close"
+          onClick={onClose}
+          title="收起终端"
+          aria-label="收起终端"
+        >
           <X size={14} />
         </button>
       </header>

@@ -141,6 +141,8 @@ export function Topbar({
                 onClick={() => setHeaderMenuOpen((previous) => !previous)}
                 title="会话操作"
                 aria-label="会话操作"
+                aria-haspopup="menu"
+                aria-expanded={headerMenuOpen}
               >
                 <MoreHorizontal size={16} />
               </button>
@@ -214,6 +216,8 @@ export function Topbar({
               className={`icon-btn ${railOpen ? 'active' : ''}`}
               onClick={() => setRailOpen((previous) => !previous)}
               title="工作区面板"
+              aria-label="工作区面板"
+              aria-expanded={railOpen}
             >
               <PanelRight size={14} />
               {reviewCount > 0 ? <span className="badge">{reviewCount}</span> : null}

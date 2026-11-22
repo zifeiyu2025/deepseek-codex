@@ -2761,6 +2761,7 @@ export default function App() {
           <button
             className="brand-search"
             title="搜索会话"
+            aria-label="搜索会话"
             onClick={() => {
               setSearchOpen(true);
               setAutomationOpen(false);
@@ -3013,6 +3014,9 @@ export default function App() {
                       <button
                         className="thread-more"
                         title="会话操作"
+                        aria-label="会话操作"
+                        aria-haspopup="menu"
+                        aria-expanded={menuThreadId === thread.id}
                         onClick={(event) => {
                           event.stopPropagation();
                           setMenuThreadId(menuThreadId === thread.id ? null : thread.id);
@@ -3083,6 +3087,8 @@ export default function App() {
               onClick={() => setAccountMenuOpen((previous) => !previous)}
               title="账户"
               aria-label="账户"
+              aria-haspopup="menu"
+              aria-expanded={accountMenuOpen}
             >
               <SettingsIcon size={14} />
             </button>
@@ -3663,6 +3669,8 @@ export default function App() {
                   <button
                     className="page-primary add-btn"
                     onClick={() => setAddMenuOpen((previous) => !previous)}
+                    aria-haspopup="menu"
+                    aria-expanded={addMenuOpen}
                   >
                     添加 <ChevronDown size={12} />
                   </button>

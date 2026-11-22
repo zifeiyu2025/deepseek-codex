@@ -274,6 +274,8 @@ export function Composer({
                     onClick={() => setAttachMenuOpen((previous) => !previous)}
                     title="添加附件"
                     aria-label="添加附件"
+                    aria-haspopup="menu"
+                    aria-expanded={attachMenuOpen}
                   >
                     <Plus size={15} />
                   </button>
@@ -350,6 +352,8 @@ export function Composer({
                     className="model-pill"
                     onClick={() => setModelMenuOpen((previous) => !previous)}
                     title="切换模型与推理强度"
+                    aria-haspopup="menu"
+                    aria-expanded={modelMenuOpen}
                   >
                     <span className="model-pill-name">{activeModel?.display_name || model}</span>
                     <span className="model-pill-effort">{effortLabel(settings.effort)}</span>
