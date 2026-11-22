@@ -11,7 +11,7 @@ const {
   Menu,
   nativeImage,
 } = require('electron');
-const { spawn, execFile } = require('node:child_process');
+const { spawn, execFile, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -98,13 +98,79 @@ let initPromise = null;
 let restartTimer = null;
 let restartAttempts = 0;
 let engineStopping = false;
+let engineEpoch = 0;
+let engineStartPromise = null;
+let engineStableTimer = null;
 let appQuitting = false;
 let apiKey = null;
 const serverLog = [];
+const MAX_SERVER_LOG_CHARS = 256 * 1024;
+let serverLogChars = 0;
 const terminals = new Map();
 let terminalSeq = 0;
 
 const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+
+function configureUserData() {
+  const appData = app.getPath('appData');
+  const profile = process.env.PORTABLE_EXECUTABLE_DIR
+    ? 'DeepSeek Codex Portable'
+    : app.isPackaged
+      ? 'DeepSeek Codex'
+      : 'DeepSeek Codex Dev';
+  const target = process.env.DEEPSEEK_CODEX_USER_DATA
+    ? path.resolve(process.env.DEEPSEEK_CODEX_USER_DATA)
+    : path.join(appData, profile);
+  app.setPath('userData', target);
+  fs.mkdirSync(target, { recursive: true });
+  const legacyDirs = [path.join(appData, 'DeepSeek Codex'), path.join(appData, 'deepseek-codex-gui')];
+  for (const legacy of legacyDirs) {
+    if (path.resolve(legacy) === path.resolve(target)) continue;
+    for (const name of ['deepseek.key', 'window-state.json', 'Local State']) {
+      const source = path.join(legacy, name);
+      const destination = path.join(target, name);
+      try {
+        if (fs.existsSync(source) && !fs.existsSync(destination)) {
+          fs.copyFileSync(source, destination);
+        }
+      } catch {
+        /* migration is best-effort */
+      }
+    }
+  }
+}
+
+function appendMainLog(message) {
+  try {
+    const dir = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'main.log');
+    try {
+      if (fs.statSync(file).size > 2 * 1024 * 1024) {
+        const previous = path.join(dir, 'main.log.1');
+        try {
+          fs.unlinkSync(previous);
+        } catch {
+          /* ignore */
+        }
+        fs.renameSync(file, previous);
+      }
+    } catch {
+      /* no log yet */
+    }
+    fs.appendFileSync(file, `${new Date().toISOString()} ${message}\n`);
+  } catch {
+    /* logging must never break the app */
+  }
+}
+
+configureUserData();
+process.on('uncaughtException', (error) => {
+  appendMainLog(`uncaughtException: ${error?.stack || error}`);
+});
+process.on('unhandledRejection', (reason) => {
+  appendMainLog(`unhandledRejection: ${reason instanceof Error ? reason.stack : String(reason)}`);
+});
 
 function apiKeyFile() {
   return path.join(app.getPath('userData'), 'deepseek.key');
@@ -113,11 +179,16 @@ function apiKeyFile() {
 function loadApiKey() {
   try {
     const file = apiKeyFile();
-    if (fs.existsSync(file) && safeStorage.isEncryptionAvailable()) {
-      apiKey = safeStorage.decryptString(fs.readFileSync(file));
+    if (!fs.existsSync(file)) return;
+    if (!safeStorage.isEncryptionAvailable()) {
+      appendMainLog('api key present but safeStorage is unavailable');
+      return;
     }
-  } catch {
+    apiKey = safeStorage.decryptString(fs.readFileSync(file));
+    appendMainLog('api key loaded');
+  } catch (error) {
     apiKey = null;
+    appendMainLog(`api key load failed: ${error?.message || error}`);
   }
 }
 
@@ -198,35 +269,62 @@ class RpcClient {
     this.pending = new Map();
     this.handlers = {};
     this.buffer = '';
+    this.closed = false;
 
+    processHandle.stdin.on('error', (error) => this.fail(error, -1));
     processHandle.stdout.setEncoding('utf8');
+    processHandle.stdout.on('error', (error) => this.fail(error, -1));
     processHandle.stdout.on('data', (chunk) => this.onData(chunk));
     processHandle.stderr.setEncoding('utf8');
+    processHandle.stderr.on('error', () => {});
     processHandle.stderr.on('data', (chunk) => {
       for (const line of chunk.split('\n')) {
         if (!line.trim()) continue;
-        serverLog.push(line);
-        if (serverLog.length > 300) serverLog.shift();
+        const trimmed = line.length > 8192 ? line.slice(0, 8192) : line;
+        serverLog.push(trimmed);
+        serverLogChars += trimmed.length;
+        while (
+          serverLog.length > 300 ||
+          (serverLogChars > MAX_SERVER_LOG_CHARS && serverLog.length > 1)
+        ) {
+          serverLogChars -= serverLog.shift().length;
+        }
       }
     });
-    processHandle.on('error', (err) => {
-      this.handlers.exit?.(-1, err);
-    });
-    processHandle.on('exit', (code) => {
-      for (const pending of this.pending.values()) {
-        pending.reject(new Error('app-server exited'));
-      }
-      this.pending.clear();
-      this.handlers.exit?.(code);
-    });
+    processHandle.on('error', (error) => this.fail(error, -1));
+    processHandle.on('exit', (code) => this.fail(new Error('app-server exited'), code));
   }
 
   on(event, handler) {
     this.handlers[event] = handler;
   }
 
+  close(reason) {
+    if (this.closed) return;
+    this.closed = true;
+    const error = new Error(reason || 'app-server closed');
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+  }
+
+  fail(error, code) {
+    if (this.closed) return;
+    this.close(error.message);
+    this.handlers.exit?.(code, error);
+  }
+
   onData(chunk) {
+    if (this.closed) return;
     this.buffer += chunk;
+    if (this.buffer.length > 8 * 1024 * 1024) {
+      try {
+        this.child.kill();
+      } catch {
+        /* ignore */
+      }
+      this.fail(new Error('app-server output exceeded 8MB without a newline'), -1);
+      return;
+    }
     let newlineIndex;
     while ((newlineIndex = this.buffer.indexOf('\n')) >= 0) {
       const line = this.buffer.slice(0, newlineIndex).trim();
@@ -267,6 +365,7 @@ class RpcClient {
   }
 
   request(method, params, timeoutMs = 180000) {
+    if (this.closed) return Promise.reject(new Error('app-server is not running'));
     const id = this.nextId++;
     const payload =
       JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {} }) + '\n';
@@ -284,22 +383,28 @@ class RpcClient {
           reject(error);
         },
       });
-      try {
-        this.child.stdin.write(payload);
-      } catch (error) {
-        clearTimeout(timer);
+      const onWrite = (error) => {
+        if (!error) return;
+        const pending = this.pending.get(id);
+        if (!pending) return;
         this.pending.delete(id);
-        reject(error);
+        pending.reject(error);
+      };
+      try {
+        this.child.stdin.write(payload, onWrite);
+      } catch (error) {
+        onWrite(error);
       }
     });
   }
 
   respond(id, result, error) {
+    if (this.closed) return;
     const message = error
       ? { jsonrpc: '2.0', id, error }
       : { jsonrpc: '2.0', id, result: result ?? {} };
     try {
-      this.child.stdin.write(JSON.stringify(message) + '\n');
+      this.child.stdin.write(JSON.stringify(message) + '\n', () => {});
     } catch {
       /* engine already gone */
     }
@@ -310,25 +415,90 @@ function broadcastStatus() {
   win?.webContents.send('app:status', { online, error: lastError });
 }
 
-function stopEngine() {
-  engineStopping = true;
+function clearEngineTimers() {
   if (restartTimer) {
     clearTimeout(restartTimer);
     restartTimer = null;
   }
+  if (engineStableTimer) {
+    clearTimeout(engineStableTimer);
+    engineStableTimer = null;
+  }
+}
+
+function killProcessTree(pid) {
+  if (!pid) return;
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      });
+      return;
+    } catch {
+      /* fall through */
+    }
+  }
   try {
-    child?.kill();
+    process.kill(pid);
   } catch {
     /* ignore */
   }
+}
+
+function shutdownEngineNow() {
+  engineStopping = true;
+  engineEpoch += 1;
+  clearEngineTimers();
+  try {
+    rpc?.close('app quitting');
+  } catch {
+    /* ignore */
+  }
+  rpc = null;
+  online = false;
+  initPromise = null;
+  const processHandle = child;
+  child = null;
+  if (processHandle?.pid) killProcessTree(processHandle.pid);
+}
+
+async function stopEngine() {
+  engineStopping = true;
+  engineEpoch += 1;
+  clearEngineTimers();
+  const processHandle = child;
+  const client = rpc;
   child = null;
   rpc = null;
   online = false;
   initPromise = null;
+  if (!processHandle || processHandle.exitCode !== null) return;
+  client?.close('app-server stopping');
+  try {
+    processHandle.kill();
+  } catch {
+    /* ignore */
+  }
+  await new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve();
+    };
+    processHandle.once('exit', finish);
+    timer = setTimeout(() => {
+      killProcessTree(processHandle.pid);
+      finish();
+    }, 2000);
+  });
 }
 
 function scheduleEngineRestart() {
-  if (engineStopping || appQuitting) return;
+  if (engineStopping || appQuitting || restartTimer) return;
   if (restartAttempts >= 3) {
     lastError = 'app-server 连续退出，已停止自动重启；可在设置 → 诊断中手动重启';
     broadcastStatus();
@@ -340,28 +510,53 @@ function scheduleEngineRestart() {
   broadcastStatus();
   restartTimer = setTimeout(() => {
     restartTimer = null;
-    startEngine();
+    if (!engineStopping && !appQuitting) void startEngine();
   }, delay);
 }
 
 async function restartEngine() {
-  stopEngine();
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  if (restartTimer) {
+    clearTimeout(restartTimer);
+    restartTimer = null;
+  }
+  await stopEngine();
+  if (appQuitting) return;
+  restartAttempts = 0;
   lastError = null;
-  startEngine();
   broadcastStatus();
+  await startEngine();
 }
 
 function startEngine() {
+  if (engineStartPromise) return engineStartPromise;
+  const promise = startEngineInternal();
+  engineStartPromise = promise;
+  promise
+    .finally(() => {
+      if (engineStartPromise === promise) engineStartPromise = null;
+    })
+    .catch(() => {});
+  return promise;
+}
+
+async function startEngineInternal() {
+  if (child) await stopEngine();
+  if (appQuitting) return;
   engineStopping = false;
+  const epoch = ++engineEpoch;
+  clearEngineTimers();
   const bin = resolveCodexBin();
   if (!bin) {
     online = false;
+    initPromise = null;
     lastError = '未找到本地 codex.exe，请先完成构建（dist/codex.exe）';
+    appendMainLog('engine binary not found');
+    broadcastStatus();
     return;
   }
+  let processHandle;
   try {
-    child = spawn(bin, ['app-server', '--listen', 'stdio://'], {
+    processHandle = spawn(bin, ['app-server', '--listen', 'stdio://'], {
       env: { ...process.env, ...(apiKey ? { DEEPSEEK_API_KEY: apiKey } : {}) },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
@@ -369,42 +564,81 @@ function startEngine() {
   } catch (error) {
     online = false;
     lastError = `无法启动 app-server：${error.message}`;
+    broadcastStatus();
+    return;
+  }
+  if (epoch !== engineEpoch || appQuitting) {
+    try {
+      processHandle.kill();
+    } catch {
+      /* ignore */
+    }
     return;
   }
 
-  rpc = new RpcClient(child);
-  rpc.on('notification', (message) => win?.webContents.send('rpc:notification', message));
-  rpc.on('serverRequest', (message) => win?.webContents.send('rpc:serverRequest', message));
-  rpc.on('exit', (code, error) => {
+  const client = new RpcClient(processHandle);
+  child = processHandle;
+  rpc = client;
+  online = false;
+  initPromise = null;
+  client.on('notification', (message) => win?.webContents.send('rpc:notification', message));
+  client.on('serverRequest', (message) => win?.webContents.send('rpc:serverRequest', message));
+  client.on('exit', (code, error) => {
+    if (epoch !== engineEpoch) return;
+    if (rpc === client) rpc = null;
+    if (child === processHandle) child = null;
     online = false;
+    initPromise = null;
+    if (engineStableTimer) {
+      clearTimeout(engineStableTimer);
+      engineStableTimer = null;
+    }
     lastError = error ? `app-server 错误：${error.message}` : `app-server 已退出（code ${code}）`;
+    appendMainLog(`engine exited: code=${code} error=${error?.message || ''}`);
     broadcastStatus();
     scheduleEngineRestart();
   });
+  broadcastStatus();
 
-  online = true;
-  initPromise = rpc
-    .request('initialize', {
-      clientInfo: {
-        name: 'deepseek-codex-gui',
-        title: 'DeepSeek Codex',
-        version: app.getVersion(),
+  const init = client
+    .request(
+      'initialize',
+      {
+        clientInfo: {
+          name: 'deepseek-codex-gui',
+          title: 'DeepSeek Codex',
+          version: app.getVersion(),
+        },
+        capabilities: { experimentalApi: true, requestAttestation: false },
       },
-      capabilities: { experimentalApi: true, requestAttestation: false },
-    })
+      20000,
+    )
     .then(() => {
+      if (epoch !== engineEpoch) return;
       online = true;
       lastError = null;
-      restartAttempts = 0;
       broadcastStatus();
+      if (engineStableTimer) clearTimeout(engineStableTimer);
+      engineStableTimer = setTimeout(() => {
+        engineStableTimer = null;
+        if (epoch === engineEpoch && online) restartAttempts = 0;
+      }, 60000);
     })
     .catch((error) => {
+      if (epoch !== engineEpoch) throw error;
       online = false;
       lastError = `app-server 初始化失败：${error.message}`;
+      appendMainLog(`engine initialize failed: ${error?.stack || error}`);
       broadcastStatus();
+      try {
+        processHandle.kill();
+      } catch {
+        /* ignore */
+      }
       throw error;
     });
-  initPromise.catch(() => {});
+  initPromise = init;
+  init.catch(() => {});
 }
 
 function windowStateFile() {
@@ -529,6 +763,12 @@ function createWindow() {
   });
   if (state.maximized) win.maximize();
   win.loadFile(path.join(ROOT, 'dist', 'index.html'));
+  win.webContents.on('render-process-gone', (_event, details) => {
+    appendMainLog(`renderer gone: reason=${details.reason} exitCode=${details.exitCode}`);
+  });
+  win.webContents.on('did-fail-load', (_event, code, description, url) => {
+    appendMainLog(`did-fail-load: code=${code} ${description} ${url}`);
+  });
   win.webContents.setWindowOpenHandler(({ url }) => {
     openExternalUrl(url);
     return { action: 'deny' };
@@ -1257,11 +1497,7 @@ function killTerminalTree(entry) {
     /* ignore */
   }
   if (process.platform === 'win32' && pid) {
-    try {
-      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {});
-    } catch {
-      /* ignore */
-    }
+    killProcessTree(pid);
   }
 }
 
@@ -1372,10 +1608,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (!win) return;
-    if (win.isMinimized()) win.restore();
-    win.show();
-    win.focus();
+    showWindow();
   });
 
   app.whenReady().then(() => {
@@ -1395,17 +1628,10 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('before-quit', () => {
     appQuitting = true;
+    appendMainLog('app quitting');
     tray?.destroy();
     tray = null;
-    if (restartTimer) {
-      clearTimeout(restartTimer);
-      restartTimer = null;
-    }
+    shutdownEngineNow();
     killAllTerminals();
-    try {
-      child?.kill();
-    } catch {
-      /* ignore */
-    }
   });
 }
