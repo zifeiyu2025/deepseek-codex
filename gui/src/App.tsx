@@ -59,6 +59,7 @@ import {
 } from 'lucide-react';
 import { BrowserPanel, FilesPanel } from './Workspace';
 import { ReviewPanel } from './ReviewPanel';
+import { Modal } from './components/Modal';
 import { SettingsPanel } from './SettingsPanel';
 import { TerminalDock } from './TerminalDock';
 import { playCompletionChime } from './lib/audio';
@@ -1108,10 +1109,10 @@ function ReviewDialog({
     return instructions.trim() ? { type: 'custom', instructions: instructions.trim() } : null;
   })();
   return (
-    <div className="key-overlay">
+    <Modal onClose={onClose} labelledBy="review-dialog-title">
       <div className="key-card review-card">
         <div className="key-kicker">CODE REVIEW</div>
-        <h2>开始审查</h2>
+        <h2 id="review-dialog-title">开始审查</h2>
         <p>引擎将在当前会话中执行审查 · {cwd || '未选择目录'}</p>
         <div className="setting-group">
           {options.map((option) => (
@@ -1158,7 +1159,7 @@ function ReviewDialog({
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -1174,10 +1175,10 @@ function UserInputPanel({
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const allAnswered = pending.questions.every((question) => answers[question.id]?.trim());
   return (
-    <div className="key-overlay">
+    <Modal onClose={onDecline} labelledBy="user-input-title">
       <div className="key-card input-card">
         <div className="key-kicker">CODEX NEEDS INPUT</div>
-        <h2>需要你的选择</h2>
+        <h2 id="user-input-title">需要你的选择</h2>
         {pending.questions.map((question: UserInputQuestion) => (
           <div className="question" key={question.id}>
             <div className="question-header">{question.header || '问题'}</div>
@@ -1211,7 +1212,7 @@ function UserInputPanel({
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -4767,6 +4768,7 @@ export default function App() {
                     className="file-button"
                     onClick={() => setAttachMenuOpen((previous) => !previous)}
                     title="添加附件"
+                    aria-label="添加附件"
                   >
                     <Plus size={15} />
                   </button>
@@ -4921,6 +4923,7 @@ export default function App() {
                   disabled={!input.trim() || preparing}
                   onClick={() => send()}
                   title={running ? '追加' : '发送'}
+                  aria-label={running ? '追加到当前任务' : '发送'}
                 >
                   <ArrowUp size={16} />
                 </button>
@@ -4931,12 +4934,14 @@ export default function App() {
                 className="subrow-btn"
                 onClick={pickFolder}
                 title={activeCwd || projectName || '选择项目'}
+                aria-label="选择项目目录"
               >
                 <FolderOpen size={12} />
               </button>
               <button
                 className="subrow-btn"
                 title="提及文件"
+                aria-label="提及文件"
                 onClick={() => {
                   const next = `${input}${input && !input.endsWith(' ') ? ' ' : ''}@`;
                   setInput(next);
@@ -4950,6 +4955,7 @@ export default function App() {
                 className="subrow-btn subrow-panel"
                 onClick={() => setRailOpen((previous) => !previous)}
                 title="工作区面板"
+                aria-label="工作区面板"
               >
                 <PanelRight size={12} />
               </button>
@@ -5682,10 +5688,12 @@ export default function App() {
       ) : null}
 
       {pluginDetail ? (
-        <div className="key-overlay">
+        <Modal onClose={() => setPluginDetail(null)} labelledBy="plugin-detail-title">
           <div className="key-card capabilities-card">
             <div className="key-kicker">PLUGIN DETAIL</div>
-            <h2>{pluginDetail.summary?.name || pluginDetail.name || '插件详情'}</h2>
+            <h2 id="plugin-detail-title">
+              {pluginDetail.summary?.name || pluginDetail.name || '插件详情'}
+            </h2>
             <p>
               {pluginDetail.description ||
                 pluginDetail.summary?.interface?.short_description ||
@@ -5734,14 +5742,14 @@ export default function App() {
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       {mcpCall ? (
-        <div className="key-overlay">
+        <Modal onClose={() => setMcpCall(null)} labelledBy="mcp-call-title">
           <div className="key-card capabilities-card">
             <div className="key-kicker">MCP DIRECT</div>
-            <h2>
+            <h2 id="mcp-call-title">
               {mcpCall.server} · {mcpCall.kind === 'tool' ? mcpCall.tool : '读取资源'}
             </h2>
             {mcpCall.kind === 'tool' ? (
@@ -5785,14 +5793,16 @@ export default function App() {
               <pre className="diag-log mcp-result">{mcpCall.result}</pre>
             ) : null}
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       {sectionDialog ? (
-        <div className="key-overlay">
+        <Modal onClose={() => setSectionDialog(null)} labelledBy="section-dialog-title">
           <div className="key-card">
             <div className="key-kicker">THREAD SECTION</div>
-            <h2>{sectionDialog.mode === 'create' ? '新建分区' : '重命名分区'}</h2>
+            <h2 id="section-dialog-title">
+              {sectionDialog.mode === 'create' ? '新建分区' : '重命名分区'}
+            </h2>
             <input
               value={sectionDialog.name}
               onChange={(event) =>
@@ -5815,14 +5825,14 @@ export default function App() {
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       {projectRenameTarget ? (
-        <div className="key-overlay">
+        <Modal onClose={() => setProjectRenameTarget(null)} labelledBy="project-rename-title">
           <div className="key-card">
             <div className="key-kicker">RENAME PROJECT</div>
-            <h2>重命名项目</h2>
+            <h2 id="project-rename-title">重命名项目</h2>
             <input
               value={projectRenameInput}
               onChange={(event) => setProjectRenameInput(event.target.value)}
@@ -5840,14 +5850,14 @@ export default function App() {
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       {renameTarget ? (
-        <div className="key-overlay">
+        <Modal onClose={() => setRenameTarget(null)} labelledBy="thread-rename-title">
           <div className="key-card">
             <div className="key-kicker">RENAME THREAD</div>
-            <h2>重命名会话</h2>
+            <h2 id="thread-rename-title">重命名会话</h2>
             <input
               value={renameInput}
               onChange={(event) => setRenameInput(event.target.value)}
@@ -5861,14 +5871,14 @@ export default function App() {
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       {keyDialog ? (
-        <div className="key-overlay">
+        <Modal onClose={() => setKeyDialog(false)} labelledBy="key-dialog-title">
           <div className="key-card">
             <div className="key-kicker">DEEPSEEK ACCESS</div>
-            <h2>连接 DeepSeek</h2>
+            <h2 id="key-dialog-title">连接 DeepSeek</h2>
             <p>
               密钥只保存在本机（Electron 加密存储），启动本地 app-server 时以环境变量注入，
               不会写入日志。
@@ -5891,7 +5901,7 @@ export default function App() {
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       ) : null}
       </div>
     </div>

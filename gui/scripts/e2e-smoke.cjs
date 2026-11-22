@@ -206,6 +206,48 @@ function getJson(url) {
   await evaluate("document.querySelector('.plugins-page .page-ghost')?.click(); true");
   await sleep(400);
 
+  await evaluate(
+    "(()=>{const trigger=document.querySelector('.thread-heading-actions button'); if(!trigger) return false; trigger.focus(); trigger.click(); return true;})()",
+  );
+  await sleep(200);
+  await evaluate(
+    "[...document.querySelectorAll('.thread-heading-menu button')].find(b=>b.textContent.includes('新建分区'))?.click(); true",
+  );
+  await sleep(300);
+  const dialog = JSON.parse(
+    await evaluate(
+      "JSON.stringify({role:document.querySelector('.key-overlay')?.getAttribute('role'),modal:document.querySelector('.key-overlay')?.getAttribute('aria-modal'),labelled:document.querySelector('.key-overlay')?.getAttribute('aria-labelledby'),focusInside:!!document.querySelector('.key-overlay')?.contains(document.activeElement),title:document.getElementById('section-dialog-title')?.textContent})",
+    ),
+  );
+  check(
+    '弹窗语义与焦点',
+    dialog.role === 'dialog' &&
+      dialog.modal === 'true' &&
+      dialog.labelled === 'section-dialog-title' &&
+      dialog.focusInside,
+    JSON.stringify(dialog),
+  );
+  check(
+    '弹窗焦点陷阱',
+    await evaluate(
+      "(()=>{const overlay=document.querySelector('.key-overlay'); if(!overlay) return false; const items=[...overlay.querySelectorAll('button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled])')].filter(e=>e.getClientRects().length>0); if(items.length<2) return false; const last=items[items.length-1]; last.focus(); last.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true})); return document.activeElement===items[0];})()",
+    ),
+  );
+  await evaluate(
+    "(()=>{const active=document.activeElement; active?.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); return true;})()",
+  );
+  await sleep(300);
+  const dialogClosed = JSON.parse(
+    await evaluate(
+      "JSON.stringify({dialog:!!document.querySelector('.key-overlay'),focusRestored:document.activeElement===document.querySelector('.thread-heading-actions button')})",
+    ),
+  );
+  check(
+    'Esc 关闭并恢复焦点',
+    !dialogClosed.dialog && dialogClosed.focusRestored,
+    JSON.stringify(dialogClosed),
+  );
+
   socket.close();
   if (failures.length > 0) {
     console.error(`\nSMOKE_FAILED ${failures.length} 项`);
