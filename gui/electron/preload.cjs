@@ -8,6 +8,7 @@ function subscribe(channel, callback) {
 
 contextBridge.exposeInMainWorld('codex', {
   getConfig: () => ipcRenderer.invoke('app:get-config'),
+  rendererReady: () => ipcRenderer.send('app:renderer-ready'),
   request: (method, params) => ipcRenderer.invoke('rpc:request', method, params),
   respond: (id, result, error) => ipcRenderer.send('rpc:respond', id, result, error),
   setApiKey: (key) => ipcRenderer.invoke('app:set-api-key', key),

@@ -487,8 +487,41 @@ function handleIpc(channel, listener) {
   });
 }
 
+const pendingRendererMessages = [];
+const MAX_PENDING_RENDERER_MESSAGES = 500;
+let rendererReady = false;
+
+function sendToRenderer(channel, payload) {
+  if (appQuitting) return;
+  if (!rendererReady || !win || win.isDestroyed() || win.webContents.isDestroyed()) {
+    if (channel === 'app:status' || channel === 'window:maximized') {
+      const existing = pendingRendererMessages.findIndex((item) => item.channel === channel);
+      if (existing >= 0) pendingRendererMessages.splice(existing, 1);
+    }
+    pendingRendererMessages.push({ channel, payload });
+    while (pendingRendererMessages.length > MAX_PENDING_RENDERER_MESSAGES) {
+      const removable = pendingRendererMessages.findIndex(
+        (item) => item.channel !== 'rpc:serverRequest' && item.channel !== 'app:status',
+      );
+      if (removable < 0) break;
+      pendingRendererMessages.splice(removable, 1);
+    }
+    return;
+  }
+  win.webContents.send(channel, payload);
+}
+
+function flushRendererMessages() {
+  rendererReady = true;
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+  const queued = pendingRendererMessages.splice(0, pendingRendererMessages.length);
+  for (const item of queued) {
+    win.webContents.send(item.channel, item.payload);
+  }
+}
+
 function broadcastStatus() {
-  win?.webContents.send('app:status', { online, error: lastError });
+  sendToRenderer('app:status', { online, error: lastError });
 }
 
 function clearEngineTimers() {
@@ -657,8 +690,8 @@ async function startEngineInternal() {
   rpc = client;
   online = false;
   initPromise = null;
-  client.on('notification', (message) => win?.webContents.send('rpc:notification', message));
-  client.on('serverRequest', (message) => win?.webContents.send('rpc:serverRequest', message));
+  client.on('notification', (message) => sendToRenderer('rpc:notification', message));
+  client.on('serverRequest', (message) => sendToRenderer('rpc:serverRequest', message));
   client.on('exit', (code, error) => {
     if (epoch !== engineEpoch) return;
     if (rpc === client) rpc = null;
@@ -788,14 +821,14 @@ function createTray() {
           label: '新建对话',
           click: () => {
             showWindow();
-            win?.webContents.send('tray:action', 'new-session');
+            sendToRenderer('tray:action', 'new-session');
           },
         },
         {
           label: '设置',
           click: () => {
             showWindow();
-            win?.webContents.send('tray:action', 'settings');
+            sendToRenderer('tray:action', 'settings');
           },
         },
         { type: 'separator' },
@@ -817,6 +850,7 @@ function createTray() {
 }
 
 function createWindow() {
+  rendererReady = false;
   const state = loadWindowState();
   win = new BrowserWindow({
     width: state.width,
@@ -880,13 +914,16 @@ function createWindow() {
     });
     contents.session.setPermissionCheckHandler(() => false);
   });
+  win.webContents.on('did-start-loading', () => {
+    rendererReady = false;
+  });
   win.webContents.on('did-finish-load', () => {
     killAllTerminals();
+    sendToRenderer('window:maximized', Boolean(win?.isMaximized()));
     broadcastStatus();
-    win?.webContents.send('window:maximized', Boolean(win?.isMaximized()));
   });
-  win.on('maximize', () => win?.webContents.send('window:maximized', true));
-  win.on('unmaximize', () => win?.webContents.send('window:maximized', false));
+  win.on('maximize', () => sendToRenderer('window:maximized', true));
+  win.on('unmaximize', () => sendToRenderer('window:maximized', false));
   win.on('close', (event) => {
     saveWindowState();
     if (!appQuitting && tray) {
@@ -896,6 +933,7 @@ function createWindow() {
   });
   win.on('closed', () => {
     win = null;
+    rendererReady = false;
     killAllTerminals();
   });
 }
@@ -1693,7 +1731,7 @@ handleIpc('terminal:start', async (_event, payload) => {
     },
   );
   const send = (channel, data) => {
-    win?.webContents.send(channel, data);
+    sendToRenderer(channel, data);
   };
   session.onData((data) => send('terminal:data', { id, data }));
   session.onExit(({ exitCode }) => {
@@ -1751,6 +1789,12 @@ handleIpc('rpc:request', async (_event, method, params) => {
 ipcMain.on('rpc:respond', (event, id, result, error) => {
   if (!isTrustedSender(event)) return;
   rpc?.respond(id, result, error);
+});
+
+ipcMain.on('app:renderer-ready', (event) => {
+  if (!isTrustedSender(event)) return;
+  flushRendererMessages();
+  broadcastStatus();
 });
 
 handleIpc('app:api-key-status', () => ({

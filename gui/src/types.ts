@@ -215,6 +215,7 @@ declare global {
     };
     codex: {
       getConfig(): Promise<AppConfig>;
+      rendererReady(): void;
       request(method: string, params?: unknown): Promise<any>;
       respond(id: number | string, result?: unknown, error?: unknown): void;
       setApiKey(key: string): Promise<{ ok: boolean }>;

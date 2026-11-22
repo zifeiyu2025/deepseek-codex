@@ -3235,6 +3235,10 @@ export default function App() {
   }, [newSession]);
 
   useEffect(() => {
+    window.codex.rendererReady();
+  }, []);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey)) return;
       if (document.querySelector('.key-overlay')) return;
