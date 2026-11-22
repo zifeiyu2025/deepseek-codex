@@ -869,6 +869,7 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       webviewTag: true,
+      backgroundThrottling: false,
     },
   });
   if (state.maximized) win.maximize();
@@ -1145,13 +1146,16 @@ handleIpc('app:image-data-url', async (_event, filePath) => {
 });
 
 handleIpc('app:notify', (_event, payload) => {
-  if (!win || win.isFocused() || !Notification.isSupported()) return false;
+  if (!win || win.isFocused()) return false;
   const title =
     typeof payload?.title === 'string' && payload.title
       ? payload.title.slice(0, 80)
       : 'DeepSeek Codex';
   const body = typeof payload?.body === 'string' ? payload.body.slice(0, 240) : '';
-  if (payload?.sound) shell.beep();
+  if (!Notification.isSupported()) {
+    tray?.displayBalloon?.({ title, content: body });
+    return false;
+  }
   const notification = new Notification({ title, body });
   notification.on('click', () => {
     if (!win) return;

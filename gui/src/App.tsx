@@ -229,13 +229,19 @@ function appendOutputDelta(list: Item[], itemId: string, delta: string): Item[] 
   return next;
 }
 
+let completionAudioContext: AudioContext | null = null;
+
 function playCompletionChime() {
   try {
     const AudioCtx =
       window.AudioContext ||
       (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return;
-    const ctx = new AudioCtx();
+    if (!completionAudioContext || completionAudioContext.state === 'closed') {
+      completionAudioContext = new AudioCtx();
+    }
+    const ctx = completionAudioContext;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
     const start = ctx.currentTime + 0.02;
     [880, 1174.66].forEach((frequency, index) => {
       const oscillator = ctx.createOscillator();
@@ -251,9 +257,6 @@ function playCompletionChime() {
       oscillator.start(at);
       oscillator.stop(at + 0.24);
     });
-    window.setTimeout(() => {
-      ctx.close().catch(() => {});
-    }, 900);
   } catch {
     /* audio unavailable */
   }
