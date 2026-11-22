@@ -60,6 +60,7 @@ import { BrowserPanel, FilesPanel } from './Workspace';
 import { ReviewPanel } from './ReviewPanel';
 import { AutomationsPage } from './components/AutomationsPage';
 import { Modal } from './components/Modal';
+import { ThreadActions } from './components/ThreadActions';
 import { ReviewDialog } from './components/ReviewDialog';
 import { UserInputPanel } from './components/UserInputPanel';
 import { useDismissOnOutside } from './hooks/useDismissOnOutside';
@@ -3727,68 +3728,36 @@ export default function App() {
                       </button>
                     </div>
                     {menuThreadId === thread.id ? (
-                      <div className="thread-menu">
-                        {pinnedSectionId ? (
-                          <button onClick={() => togglePinThread(thread)}>
-                            {thread.section?.id === pinnedSectionId ? '取消置顶' : '置顶'}
-                          </button>
-                        ) : null}
-                        <button
-                          onClick={() =>
-                            setMoveThreadId(moveThreadId === thread.id ? null : thread.id)
-                          }
-                        >
-                          移动到分区…
-                        </button>
-                        {moveThreadId === thread.id ? (
-                          <div className="thread-submenu">
-                            <button onClick={() => moveThreadToSection(thread, null)}>
-                              无分区
-                            </button>
-                            {sections
-                              .filter((section) => section.id !== pinnedSectionId)
-                              .map((section) => (
-                                <button
-                                  key={section.id}
-                                  onClick={() => moveThreadToSection(thread, section.id)}
-                                >
-                                  {section.name}
-                                </button>
-                              ))}
-                            {sections.filter((section) => section.id !== pinnedSectionId)
-                              .length === 0 ? (
-                              <span className="thread-submenu-empty">还没有分区</span>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        <button
-                          onClick={() => {
-                            setRenameTarget(thread);
-                            setRenameInput(thread.name || thread.preview || '');
-                            setMenuThreadId(null);
-                          }}
-                        >
-                          重命名
-                        </button>
-                        {threadId === thread.id ? (
-                          <button onClick={compactThread}>压缩上下文</button>
-                        ) : null}
-                        {threadId === thread.id && lastTurnId && !running ? (
-                          <button onClick={() => void revertLastTurn()}>回退最后一轮</button>
-                        ) : null}
-                        <button onClick={() => forkThread(thread)}>分叉会话</button>
-                        {showArchived ? (
-                          <button onClick={() => unarchiveThread(thread)}>恢复</button>
-                        ) : (
-                          <button onClick={() => archiveThread(thread)}>归档</button>
-                        )}
-                        {readStates[thread.id]?.revision ? (
-                          <button onClick={() => markThreadUnread(thread)}>标记为未读</button>
-                        ) : null}
-                        <button className="danger" onClick={() => deleteThread(thread)}>
-                          删除
-                        </button>
-                      </div>
+                      <ThreadActions
+                        className="thread-menu"
+                        thread={thread}
+                        active={threadId === thread.id}
+                        archivedView={showArchived}
+                        running={running}
+                        canRevert={threadId === thread.id && Boolean(lastTurnId) && !running}
+                        canMarkUnread={Boolean(readStates[thread.id]?.revision)}
+                        pinnedSectionId={pinnedSectionId}
+                        sections={sections}
+                        moveOpen={moveThreadId === thread.id}
+                        showMove
+                        onToggleMove={() =>
+                          setMoveThreadId(moveThreadId === thread.id ? null : thread.id)
+                        }
+                        onMove={(sectionId) => void moveThreadToSection(thread, sectionId)}
+                        onTogglePin={() => void togglePinThread(thread)}
+                        onRename={() => {
+                          setRenameTarget(thread);
+                          setRenameInput(thread.name || thread.preview || '');
+                        }}
+                        onCompact={() => void compactThread()}
+                        onRevert={() => void revertLastTurn()}
+                        onFork={() => void forkThread(thread)}
+                        onArchive={() => void archiveThread(thread)}
+                        onUnarchive={() => void unarchiveThread(thread)}
+                        onMarkUnread={() => void markThreadUnread(thread)}
+                        onDelete={() => void deleteThread(thread)}
+                        onClose={() => setMenuThreadId(null)}
+                      />
                     ) : null}
                   </div>
                 ))}
@@ -4003,71 +3972,34 @@ export default function App() {
                 <MoreHorizontal size={16} />
               </button>
               {headerMenuOpen && currentThread ? (
-                <div className="header-menu">
-                  <button
-                    onClick={() => {
-                      setRenameTarget(currentThread);
-                      setRenameInput(currentThread.name || currentThread.preview || '');
-                      setHeaderMenuOpen(false);
-                    }}
-                  >
-                    重命名
-                  </button>
-                  <button
-                    onClick={() => {
-                      void forkThread(currentThread);
-                      setHeaderMenuOpen(false);
-                    }}
-                  >
-                    分叉会话
-                  </button>
-                  {pinnedSectionId ? (
-                    <button
-                      onClick={() => {
-                        void togglePinThread(currentThread);
-                        setHeaderMenuOpen(false);
-                      }}
-                    >
-                      {currentThread.section?.id === pinnedSectionId ? '取消置顶' : '置顶'}
-                    </button>
-                  ) : null}
-                  <button
-                    disabled={running}
-                    onClick={() => {
-                      void compactThread();
-                      setHeaderMenuOpen(false);
-                    }}
-                  >
-                    压缩上下文
-                  </button>
-                  {lastTurnId && !running ? (
-                    <button
-                      onClick={() => {
-                        void revertLastTurn();
-                        setHeaderMenuOpen(false);
-                      }}
-                    >
-                      回退最后一轮
-                    </button>
-                  ) : null}
-                  <button
-                    onClick={() => {
-                      void archiveThread(currentThread);
-                      setHeaderMenuOpen(false);
-                    }}
-                  >
-                    归档
-                  </button>
-                  <button
-                    className="danger"
-                    onClick={() => {
-                      void deleteThread(currentThread);
-                      setHeaderMenuOpen(false);
-                    }}
-                  >
-                    删除
-                  </button>
-                </div>
+                <ThreadActions
+                  className="header-menu"
+                  thread={currentThread}
+                  active={threadId === currentThread.id}
+                  archivedView={showArchived}
+                  running={running}
+                  canRevert={threadId === currentThread.id && Boolean(lastTurnId) && !running}
+                  canMarkUnread={false}
+                  pinnedSectionId={pinnedSectionId}
+                  sections={[]}
+                  moveOpen={false}
+                  showMove={false}
+                  onToggleMove={() => {}}
+                  onMove={() => {}}
+                  onTogglePin={() => void togglePinThread(currentThread)}
+                  onRename={() => {
+                    setRenameTarget(currentThread);
+                    setRenameInput(currentThread.name || currentThread.preview || '');
+                  }}
+                  onCompact={() => void compactThread()}
+                  onRevert={() => void revertLastTurn()}
+                  onFork={() => void forkThread(currentThread)}
+                  onArchive={() => void archiveThread(currentThread)}
+                  onUnarchive={() => void unarchiveThread(currentThread)}
+                  onMarkUnread={() => {}}
+                  onDelete={() => void deleteThread(currentThread)}
+                  onClose={() => setHeaderMenuOpen(false)}
+                />
               ) : null}
             </div>
             <button

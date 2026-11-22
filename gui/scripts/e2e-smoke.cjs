@@ -153,6 +153,23 @@ function getJson(url) {
     }
   }
 
+  const threadMenuOpened = await evaluate(
+    "(()=>{const button=document.querySelector('.thread-more'); if(!button) return false; button.click(); return true;})()",
+  );
+  await sleep(200);
+  check(
+    '会话菜单统一操作',
+    threadMenuOpened &&
+      (await evaluate(
+        "(()=>{const text=[...document.querySelectorAll('.thread-menu button')].map(b=>b.textContent.trim()).join('|'); return text.includes('重命名') && text.includes('分叉会话') && text.includes('删除');})()",
+      )),
+  );
+  await evaluate(
+    "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); true",
+  );
+  await sleep(200);
+  check('会话菜单 Esc 关闭', !(await evaluate("!!document.querySelector('.thread-menu')")));
+
   await evaluate("document.querySelector('.account-settings')?.click(); true");
   await sleep(200);
   await evaluate(
