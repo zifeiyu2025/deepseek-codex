@@ -56,6 +56,7 @@ import { ApprovalPanel } from './components/ApprovalPanel';
 import { AutomationsPage } from './components/AutomationsPage';
 import { Composer } from './components/Composer';
 import { Hero } from './components/Hero';
+import { Sidebar } from './components/Sidebar';
 import { ActivityStep, MessageItem } from './components/Messages';
 import { Modal } from './components/Modal';
 import { ThreadActions } from './components/ThreadActions';
@@ -2750,372 +2751,69 @@ export default function App() {
       </div>
 
       <div className={`shell ${railOpen ? 'with-rail' : ''}`}>
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">◇</div>
-          <div className="brand-info">
-            <div className="brand-title">
-              ShaNiu <span className="brand-badge">harness</span>
-            </div>
-          </div>
-          <button
-            className="brand-search"
-            title="搜索会话"
-            aria-label="搜索会话"
-            onClick={() => {
-              setSearchOpen(true);
-              setAutomationOpen(false);
-              setCapabilitiesOpen(false);
-              setRailOpen(false);
-              setThreadQuery('');
-              window.setTimeout(
-                () => document.getElementById('global-search-input')?.focus(),
-                60,
-              );
-            }}
-          >
-            <Search size={15} />
-          </button>
-        </div>
-
-        <nav className="side-nav">
-          <button className="nav-row" onClick={newSession}>
-            <SquarePen size={16} /> 新对话
-          </button>
-          <button
-            className="nav-row"
-            onClick={() => {
-              setAutomationOpen(true);
-              setRailOpen(false);
-            }}
-          >
-            <Clock size={16} /> 定时任务
-            {automations.some((automation) => automation.enabled) ? (
-              <span className="nav-state ok">已启用</span>
-            ) : null}
-          </button>
-          <button className="nav-row" onClick={openCapabilities}>
-            <Boxes size={16} /> 插件
-          </button>
-        </nav>
-
-        <div className="side-section">
-          <div className="side-label">项目</div>
-          {projects.length === 0 ? <div className="projects-empty">暂无项目</div> : null}
-          <button
-            className={`project-row ${!projectId ? 'active' : ''}`}
-            onClick={() => selectProject(null)}
-            title="显示全部项目的会话"
-          >
-            <Layers size={15} />
-            <span>全部项目</span>
-            {!projectId ? <Check size={12} /> : null}
-          </button>
-          {projects.map((project) => (
-            <div className="project-wrap" key={project.id}>
-              <button
-                className={`project-row ${projectId === project.id ? 'active' : ''}`}
-                onClick={() => selectProject(project)}
-                title={project.roots?.[0]?.path || project.name}
-              >
-                <FolderOpen size={15} />
-                <span>{project.name}</span>
-                {projectId === project.id ? <Check size={12} /> : null}
-              </button>
-              <button
-                className="project-more"
-                title="项目操作"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setProjectMenuId(projectMenuId === project.id ? null : project.id);
-                }}
-              >
-                ⋯
-              </button>
-              {projectMenuId === project.id ? (
-                <div className="project-menu">
-                  <button
-                    onClick={() => {
-                      setProjectRenameTarget(project);
-                      setProjectRenameInput(project.name);
-                      setProjectMenuId(null);
-                    }}
-                  >
-                    重命名
-                  </button>
-                  <button className="danger" onClick={() => removeProject(project)}>
-                    移除
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ))}
-          <button className="project-row project-add" onClick={addProject} title="添加本地文件夹为项目">
-            <FolderPlus size={15} />
-            <span>添加项目</span>
-          </button>
-        </div>
-
-        <div className="thread-heading">
-          <span>{showArchived ? '归档会话' : '最近'}</span>
-          <div className="thread-heading-actions">
-            <button
-              onClick={(event) => {
-                event.stopPropagation();
-                setThreadHeadingMenu((previous) => !previous);
-              }}
-              title="更多"
-            >
-              ⋯
-            </button>
-            {threadHeadingMenu ? (
-              <div className="thread-heading-menu">
-                <button
-                  onClick={() => {
-                    setSectionDialog({ mode: 'create', name: '' });
-                    setThreadHeadingMenu(false);
-                  }}
-                >
-                  新建分区
-                </button>
-                <button
-                  onClick={() => {
-                    toggleArchived();
-                    setThreadHeadingMenu(false);
-                  }}
-                >
-                  {showArchived ? '返回对话列表' : '查看已归档会话'}
-                </button>
-                <button
-                  onClick={() => {
-                    void refreshThreads(true);
-                    setThreadHeadingMenu(false);
-                  }}
-                >
-                  刷新
-                </button>
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        {!searchOpen && threadQuery ? (
-          <label className="thread-search">
-            <Search size={12} />
-            <input
-              value={threadQuery}
-              onChange={(event) => setThreadQuery(event.target.value)}
-              placeholder={showArchived ? '搜索归档会话…' : '搜索会话…'}
-            />
-          </label>
-        ) : null}
-
-        <div className="thread-list">
-          {threadQuery.trim().length >= 2 ? (
-            searchBusy && searchResults.length === 0 ? (
-              <div className="thread-empty">正在搜索全部会话…</div>
-            ) : searchResults.length === 0 ? (
-              <div className="thread-empty">没有匹配的会话</div>
-            ) : (
-              <>
-                <div className="thread-group-label">搜索结果</div>
-                {searchResults.map((result) => (
-                  <button
-                    className={`search-result ${threadId === result.thread.id ? 'active' : ''}`}
-                    key={result.thread.id}
-                    onClick={() => openSearchResult(result)}
-                  >
-                    <span className="search-result-title">
-                      {result.thread.name || result.thread.preview || '未命名会话'}
-                    </span>
-                    <span className="search-result-snippet">
-                      {cleanSnippet(result.snippet) || cleanSnippet(result.thread.preview) || '无摘要'}
-                    </span>
-                    <span className="search-result-meta">
-                      {timeAgo(result.thread.updatedAt)}
-                      {result.thread.projectId
-                        ? ` · ${
-                            projects.find((project) => project.id === result.thread.projectId)
-                              ?.name || '项目'
-                          }`
-                        : ''}
-                    </span>
-                  </button>
-                ))}
-              </>
-            )
-          ) : threadGroups.length === 0 ? (
-            <div className="thread-empty">
-              {showArchived ? '没有已归档的会话' : '还没有会话'}
-            </div>
-          ) : (
-            threadGroups.map((group) => (
-              <div className="thread-group" key={group.sectionId || group.label}>
-                {group.sectionId ? (
-                <div className="thread-group-label">
-                  <span>{group.label}</span>
-                  {group.sectionId && group.sectionId !== pinnedSectionId ? (
-                    <button
-                      className="section-more"
-                      title="分区操作"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setSectionMenuId(
-                          sectionMenuId === group.sectionId ? null : group.sectionId || null,
-                        );
-                      }}
-                    >
-                      ⋯
-                    </button>
-                  ) : null}
-                </div>
-                ) : null}
-                {sectionMenuId && sectionMenuId === group.sectionId ? (
-                  <div className="section-menu">
-                    <button
-                      onClick={() => {
-                        setSectionDialog({
-                          mode: 'rename',
-                          id: group.sectionId,
-                          name: group.label,
-                        });
-                        setSectionMenuId(null);
-                      }}
-                    >
-                      重命名
-                    </button>
-                    <button
-                      className="danger"
-                      onClick={() =>
-                        removeSection({ id: group.sectionId as string, name: group.label })
-                      }
-                    >
-                      删除
-                    </button>
-                  </div>
-                ) : null}
-                {group.items.map((thread) => (
-                  <div key={thread.id} className="thread-wrap">
-                    <div
-                      className={`thread ${threadId === thread.id ? 'active' : ''}`}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => resumeThread(thread)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') resumeThread(thread);
-                      }}
-                    >
-                      <span className="thread-preview">
-                        {readStates[thread.id]?.firstUnread ? (
-                          <span className="unread-dot" title="未读" />
-                        ) : null}
-                        {thread.name || thread.preview || '未命名会话'}
-                      </span>
-                      <button
-                        className="thread-more"
-                        title="会话操作"
-                        aria-label="会话操作"
-                        aria-haspopup="menu"
-                        aria-expanded={menuThreadId === thread.id}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setMenuThreadId(menuThreadId === thread.id ? null : thread.id);
-                        }}
-                      >
-                        ⋯
-                      </button>
-                    </div>
-                    {menuThreadId === thread.id ? (
-                      <ThreadActions
-                        className="thread-menu"
-                        thread={thread}
-                        active={threadId === thread.id}
-                        archivedView={showArchived}
-                        running={running}
-                        canRevert={threadId === thread.id && Boolean(lastTurnId) && !running}
-                        canMarkUnread={Boolean(readStates[thread.id]?.revision)}
-                        pinnedSectionId={pinnedSectionId}
-                        sections={sections}
-                        moveOpen={moveThreadId === thread.id}
-                        showMove
-                        onToggleMove={() =>
-                          setMoveThreadId(moveThreadId === thread.id ? null : thread.id)
-                        }
-                        onMove={(sectionId) => void moveThreadToSection(thread, sectionId)}
-                        onTogglePin={() => void togglePinThread(thread)}
-                        onRename={() => {
-                          setRenameTarget(thread);
-                          setRenameInput(thread.name || thread.preview || '');
-                        }}
-                        onCompact={() => void compactThread()}
-                        onRevert={() => void revertLastTurn()}
-                        onFork={() => void forkThread(thread)}
-                        onArchive={() => void archiveThread(thread)}
-                        onUnarchive={() => void unarchiveThread(thread)}
-                        onMarkUnread={() => void markThreadUnread(thread)}
-                        onDelete={() => void deleteThread(thread)}
-                        onClose={() => setMenuThreadId(null)}
-                      />
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            ))
-          )}
-          {!threadQuery.trim() && threadCursor ? (
-            <button
-              className="thread-load-more"
-              disabled={threadLoadingMore}
-              onClick={() => void loadMoreThreads()}
-            >
-              {threadLoadingMore ? '加载中…' : '加载更多会话'}
-            </button>
-          ) : null}
-        </div>
-
-        <div className="sidebar-foot">
-          <div className="account-row" title={config?.codexHome || ''}>
-            <button
-              className="account-main"
-              onClick={() => setAccountMenuOpen((previous) => !previous)}
-            >
-              <span className="account-dot" />
-              <span>{config?.defaultProvider || 'deepseek'}</span>
-            </button>
-            <button
-              className="account-settings"
-              onClick={() => setAccountMenuOpen((previous) => !previous)}
-              title="账户"
-              aria-label="账户"
-              aria-haspopup="menu"
-              aria-expanded={accountMenuOpen}
-            >
-              <SettingsIcon size={14} />
-            </button>
-            {accountMenuOpen ? (
-              <div className="account-menu">
-                <button
-                  onClick={() => {
-                    openSettings();
-                    setAccountMenuOpen(false);
-                  }}
-                >
-                  设置
-                  <span className="account-shortcut">Ctrl+,</span>
-                </button>
-                <button
-                  onClick={() => {
-                    openSettings('shortcuts');
-                    setAccountMenuOpen(false);
-                  }}
-                >
-                  帮助
-                </button>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </aside>
+      <Sidebar
+        config={config}
+        automations={automations}
+        projects={projects}
+        projectId={projectId}
+        projectMenuId={projectMenuId}
+        setProjectMenuId={setProjectMenuId}
+        setProjectRenameTarget={setProjectRenameTarget}
+        setProjectRenameInput={setProjectRenameInput}
+        addProject={() => void addProject()}
+        removeProject={removeProject}
+        removeSection={removeSection}
+        selectProject={selectProject}
+        newSession={newSession}
+        openCapabilities={() => void openCapabilities()}
+        openSettings={openSettings}
+        setSearchOpen={setSearchOpen}
+        setAutomationOpen={setAutomationOpen}
+        setCapabilitiesOpen={setCapabilitiesOpen}
+        setRailOpen={setRailOpen}
+        threadQuery={threadQuery}
+        setThreadQuery={setThreadQuery}
+        searchOpen={searchOpen}
+        searchResults={searchResults}
+        searchBusy={searchBusy}
+        openSearchResult={openSearchResult}
+        threadHeadingMenu={threadHeadingMenu}
+        setThreadHeadingMenu={setThreadHeadingMenu}
+        toggleArchived={toggleArchived}
+        refreshThreads={refreshThreads}
+        showArchived={showArchived}
+        threadGroups={threadGroups}
+        readStates={readStates}
+        threadId={threadId}
+        resumeThread={resumeThread}
+        menuThreadId={menuThreadId}
+        setMenuThreadId={setMenuThreadId}
+        sectionMenuId={sectionMenuId}
+        setSectionMenuId={setSectionMenuId}
+        setMoveThreadId={setMoveThreadId}
+        moveThreadId={moveThreadId}
+        pinnedSectionId={pinnedSectionId}
+        sections={sections}
+        lastTurnId={lastTurnId}
+        running={running}
+        setRenameTarget={setRenameTarget}
+        setRenameInput={setRenameInput}
+        setSectionDialog={setSectionDialog}
+        togglePinThread={togglePinThread}
+        moveThreadToSection={moveThreadToSection}
+        compactThread={compactThread}
+        revertLastTurn={revertLastTurn}
+        forkThread={forkThread}
+        archiveThread={archiveThread}
+        unarchiveThread={unarchiveThread}
+        markThreadUnread={markThreadUnread}
+        deleteThread={deleteThread}
+        threadCursor={threadCursor}
+        threadLoadingMore={threadLoadingMore}
+        loadMoreThreads={loadMoreThreads}
+        accountMenuOpen={accountMenuOpen}
+        setAccountMenuOpen={setAccountMenuOpen}
+      />
 
       <main
         className={`main ${
