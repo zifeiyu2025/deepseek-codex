@@ -1,0 +1,79 @@
+{
+  "name": "deepseek-codex-gui",
+  "version": "0.44.0",
+  "private": true,
+  "description": "Independent desktop GUI for the locally built Codex app-server, defaulting to DeepSeek.",
+  "author": "local",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "build": "vite build",
+    "start": "npm run build && electron .",
+    "app": "electron .",
+    "test:smoke": "node scripts/e2e-smoke.cjs",
+    "dist:win": "npm run build && node scripts/prepare-engine.cjs && electron-builder --win portable"
+  },
+  "build": {
+    "appId": "local.deepseek.codex",
+    "productName": "DeepSeek Codex",
+    "npmRebuild": false,
+    "electronDist": "node_modules/electron/dist",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "codex.exe",
+        "to": "codex/codex.exe"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**/*"
+    ],
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "DeepSeek-Codex-${version}.exe"
+    }
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
+    "@fontsource/instrument-serif": "^5.3.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "lucide-react": "^1.77.0",
+    "node-pty": "^1.1.0",
+    "prism-react-renderer": "^2.4.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true
+  }
+}

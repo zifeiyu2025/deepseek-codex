@@ -1,0 +1,16 @@
+model = "deepseek-flash"
+model_provider = "deepseek"
+forced_login_method = "api"
+model_reasoning_effort = "high"
+show_raw_agent_reasoning = true
+suppress_unstable_features_warning = true
+model_catalog_json = "C:/Users/jun/.codex/models.json"
+
+[model_providers.deepseek]
+name = "deepseek"
+base_url = "https://api.deepseek.com/"
+wire_api = "responses"
+env_key = "DEEPSEEK_API_KEY"
+
+[desktop]
+enabled-reasoning-efforts = ["low", "medium", "high", "xhigh", "ultra", "max"]

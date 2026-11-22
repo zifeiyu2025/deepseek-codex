@@ -1,0 +1,29 @@
+# Local git config (may contain proxy credentials)
+/.gitconfig
+
+# Rust / engine build output
+/build/
+/dist/
+
+# Upstream engine source (nested git repo, fetched and patched separately)
+/codex-src/
+
+# GUI dependencies and packaged output
+/gui/node_modules/
+/gui/dist/
+/gui/release/
+/gui/release-*/
+/gui/codex.exe
+/gui/electron.log
+/gui/cdp-electron.log
+
+# Reference screenshots (may contain local paths and conversation content)
+/gui/refs/
+
+# Runtime logs
+/logs/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
