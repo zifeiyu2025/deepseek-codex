@@ -9,6 +9,7 @@ import {
   ArrowUp,
 } from 'lucide-react';
 import type { GitReview, ReviewFile, ReviewScope } from './types';
+import { friendlyClientError } from './lib/errors';
 import { readStorage, writeStorage } from './lib/storage';
 
 type Scope = ReviewScope | 'thread';
@@ -87,7 +88,7 @@ function threadKind(kind?: string): string {
 }
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return friendlyClientError(error);
 }
 
 const SCOPES: { id: Scope; label: string }[] = [

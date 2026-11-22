@@ -155,6 +155,18 @@ function getJson(url) {
 
   await evaluate("document.querySelector('.account-settings')?.click(); true");
   await sleep(200);
+  await evaluate(
+    "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); true",
+  );
+  await sleep(200);
+  check('菜单 Esc 关闭', !(await evaluate("!!document.querySelector('.account-menu')")));
+  await evaluate("document.querySelector('.account-settings')?.click(); true");
+  await sleep(200);
+  await evaluate("document.body.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})); true");
+  await sleep(200);
+  check('菜单外部点击关闭', !(await evaluate("!!document.querySelector('.account-menu')")));
+  await evaluate("document.querySelector('.account-settings')?.click(); true");
+  await sleep(200);
   await evaluate("[...document.querySelectorAll('.account-menu button')].find(b=>b.textContent.includes('设置'))?.click(); true");
   await sleep(700);
   const settingsTabs = await evaluate(

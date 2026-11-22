@@ -60,6 +60,7 @@ import {
 import { BrowserPanel, FilesPanel } from './Workspace';
 import { ReviewPanel } from './ReviewPanel';
 import { Modal } from './components/Modal';
+import { useDismissOnOutside } from './hooks/useDismissOnOutside';
 import { SettingsPanel } from './SettingsPanel';
 import { TerminalDock } from './TerminalDock';
 import { playCompletionChime } from './lib/audio';
@@ -1299,15 +1300,6 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [railQuick, setRailQuick] = useState('');
 
-  useEffect(() => {
-    if (!headerMenuOpen) return;
-    const close = (event: MouseEvent) => {
-      if ((event.target as HTMLElement).closest('.header-menu-wrap')) return;
-      setHeaderMenuOpen(false);
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [headerMenuOpen]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('runtime');
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
@@ -1539,32 +1531,6 @@ export default function App() {
     void refreshGitInfo();
   }, [refreshGitInfo]);
 
-  useEffect(() => {
-    if (!modelMenuOpen && !attachMenuOpen && !projectMenuId) return;
-    const close = (event: MouseEvent) => {
-      const target = event.target as Element;
-      if (modelMenuOpen && !target.closest('.model-pill-wrap')) setModelMenuOpen(false);
-      if (attachMenuOpen && !target.closest('.attach-wrap')) setAttachMenuOpen(false);
-      if (projectMenuId && !target.closest('.project-wrap')) setProjectMenuId(null);
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [attachMenuOpen, modelMenuOpen, projectMenuId]);
-
-  useEffect(() => {
-    if (!menuThreadId && !sectionMenuId) return;
-    const close = (event: MouseEvent) => {
-      const target = event.target as Element;
-      if (menuThreadId && !target.closest('.thread-wrap')) {
-        setMenuThreadId(null);
-      }
-      if (sectionMenuId && !target.closest('.thread-group')) {
-        setSectionMenuId(null);
-      }
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [menuThreadId, sectionMenuId]);
 
   useEffect(() => {
     if (searchOpen) {
@@ -1591,20 +1557,53 @@ export default function App() {
     if (terminalOpen) setTerminalMounted(true);
   }, [terminalOpen]);
 
-  useEffect(() => {
-    if (!threadHeadingMenu && !accountMenuOpen) return;
-    const close = (event: MouseEvent) => {
-      const target = event.target as Element;
-      if (threadHeadingMenu && !target.closest('.thread-heading-actions')) {
-        setThreadHeadingMenu(false);
-      }
-      if (accountMenuOpen && !target.closest('.account-row')) {
-        setAccountMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [threadHeadingMenu, accountMenuOpen]);
+  useDismissOnOutside([
+    {
+      isOpen: headerMenuOpen,
+      selector: '.header-menu-wrap',
+      close: () => setHeaderMenuOpen(false),
+    },
+    {
+      isOpen: modelMenuOpen,
+      selector: '.model-pill-wrap',
+      close: () => setModelMenuOpen(false),
+    },
+    {
+      isOpen: attachMenuOpen,
+      selector: '.attach-wrap',
+      close: () => setAttachMenuOpen(false),
+    },
+    {
+      isOpen: Boolean(projectMenuId),
+      selector: '.project-wrap',
+      close: () => setProjectMenuId(null),
+    },
+    {
+      isOpen: Boolean(menuThreadId),
+      selector: '.thread-wrap',
+      close: () => setMenuThreadId(null),
+    },
+    {
+      isOpen: Boolean(sectionMenuId),
+      selector: '.thread-group',
+      close: () => setSectionMenuId(null),
+    },
+    {
+      isOpen: threadHeadingMenu,
+      selector: '.thread-heading-actions',
+      close: () => setThreadHeadingMenu(false),
+    },
+    {
+      isOpen: accountMenuOpen,
+      selector: '.account-row',
+      close: () => setAccountMenuOpen(false),
+    },
+    {
+      isOpen: addMenuOpen,
+      selector: '.add-menu-wrap',
+      close: () => setAddMenuOpen(false),
+    },
+  ]);
 
   useEffect(() => {
     if (!menuThreadId) setMoveThreadId(null);
@@ -1931,7 +1930,7 @@ export default function App() {
         setReadStates((previous) => ({ ...previous, ...response.readStates }));
       }
     } catch (loadError: any) {
-      setError(loadError?.message || String(loadError));
+      setError(friendlyClientError(loadError));
     } finally {
       setThreadLoadingMore(false);
     }
@@ -2326,7 +2325,9 @@ export default function App() {
           setRunning(false);
           setTurnId(null);
           if (params.turn?.id) setLastTurnId(params.turn.id);
-          if (params.turn?.error?.message) setError(params.turn.error.message);
+          if (params.turn?.error?.message) {
+            setError(friendlyClientError(params.turn.error.message));
+          }
           setReviewTick((previous) => previous + 1);
           refreshThreads();
           if (!document.hasFocus() && notifyOnComplete) {
@@ -2376,7 +2377,7 @@ export default function App() {
           }
           break;
         case 'warning':
-          if (params.message) setError(params.message);
+          if (params.message) setError(friendlyClientError(params.message));
           break;
         case 'project/changed':
           refreshProjects();
@@ -2417,7 +2418,9 @@ export default function App() {
           break;
         }
         case 'error':
-          setError(params.error?.message || '请求出错');
+          setError(
+            params.error?.message ? friendlyClientError(params.error.message) : '请求出错',
+          );
           break;
         default:
           break;
@@ -2759,7 +2762,7 @@ export default function App() {
       await refreshProjects();
       selectProject(project);
     } catch (projectError: any) {
-      setError(projectError?.message || String(projectError));
+      setError(friendlyClientError(projectError));
     }
   }, [projects, refreshProjects, selectProject]);
 
@@ -2776,7 +2779,7 @@ export default function App() {
         await refreshProjects();
         refreshThreads();
       } catch (projectError: any) {
-        setError(projectError?.message || String(projectError));
+        setError(friendlyClientError(projectError));
       }
     },
     [refreshProjects, refreshThreads],
@@ -2795,7 +2798,7 @@ export default function App() {
       setProjectRenameInput('');
       refreshProjects();
     } catch (projectError: any) {
-      setError(projectError?.message || String(projectError));
+      setError(friendlyClientError(projectError));
     }
   }, [projectRenameInput, projectRenameTarget, refreshProjects]);
 
@@ -2876,7 +2879,7 @@ export default function App() {
         });
         await openCapabilities();
       } catch (toggleError: any) {
-        setError(toggleError?.message || String(toggleError));
+        setError(friendlyClientError(toggleError));
       } finally {
         setCapabilityBusy(false);
       }
@@ -2915,7 +2918,7 @@ export default function App() {
       setMcpForm({ name: '', command: '', args: '', env: '' });
       await openCapabilities();
     } catch (saveError: any) {
-      setError(saveError?.message || String(saveError));
+      setError(friendlyClientError(saveError));
     } finally {
       setCapabilityBusy(false);
     }
@@ -2937,7 +2940,7 @@ export default function App() {
         });
         await openCapabilities();
       } catch (removeError: any) {
-        setError(removeError?.message || String(removeError));
+        setError(friendlyClientError(removeError));
       } finally {
         setCapabilityBusy(false);
       }
@@ -2959,7 +2962,7 @@ export default function App() {
           setNotice('登录请求已发出');
         }
       } catch (loginError: any) {
-        setError(loginError?.message || String(loginError));
+        setError(friendlyClientError(loginError));
       } finally {
         setCapabilityBusy(false);
       }
@@ -2979,7 +2982,7 @@ export default function App() {
         setNotice(`已安装插件 ${plugin.name}`);
         await openCapabilities();
       } catch (pluginError: any) {
-        setError(pluginError?.message || String(pluginError));
+        setError(friendlyClientError(pluginError));
       } finally {
         setPluginBusy(false);
       }
@@ -2996,7 +2999,7 @@ export default function App() {
         setNotice(`已卸载插件 ${plugin.name}`);
         await openCapabilities();
       } catch (pluginError: any) {
-        setError(pluginError?.message || String(pluginError));
+        setError(friendlyClientError(pluginError));
       } finally {
         setPluginBusy(false);
       }
@@ -3019,7 +3022,7 @@ export default function App() {
       });
       setPluginResults(response?.data || []);
     } catch (searchError: any) {
-      setError(searchError?.message || String(searchError));
+      setError(friendlyClientError(searchError));
     } finally {
       setPluginResultsBusy(false);
     }
@@ -3041,7 +3044,7 @@ export default function App() {
       setMarketplaceRef('');
       await openCapabilities();
     } catch (marketplaceError: any) {
-      setError(marketplaceError?.message || String(marketplaceError));
+      setError(friendlyClientError(marketplaceError));
     } finally {
       setMarketplaceBusy(false);
     }
@@ -3062,7 +3065,7 @@ export default function App() {
         );
         await openCapabilities();
       } catch (marketplaceError: any) {
-        setError(marketplaceError?.message || String(marketplaceError));
+        setError(friendlyClientError(marketplaceError));
       } finally {
         setMarketplaceBusy(false);
       }
@@ -3079,7 +3082,7 @@ export default function App() {
         setNotice(`已移除市场 ${marketplaceName}`);
         await openCapabilities();
       } catch (marketplaceError: any) {
-        setError(marketplaceError?.message || String(marketplaceError));
+        setError(friendlyClientError(marketplaceError));
       } finally {
         setMarketplaceBusy(false);
       }
@@ -3096,7 +3099,7 @@ export default function App() {
       });
       setPluginDetail(response?.plugin || null);
     } catch (pluginError: any) {
-      setError(pluginError?.message || String(pluginError));
+      setError(friendlyClientError(pluginError));
     }
   }, []);
 
@@ -3106,7 +3109,7 @@ export default function App() {
       await window.codex.request('config/mcpServer/reload', {});
       await openCapabilities();
     } catch (mcpError: any) {
-      setError(mcpError?.message || String(mcpError));
+      setError(friendlyClientError(mcpError));
     } finally {
       setCapabilityBusy(false);
     }
@@ -3155,7 +3158,7 @@ export default function App() {
       });
       setNotice(result.applied ? result.message || '已应用到主仓库工作区' : result.message || '没有可应用的变更');
     } catch (applyError: any) {
-      setError(applyError?.message || String(applyError));
+      setError(friendlyClientError(applyError));
     } finally {
       setWorktreeBusy(false);
     }
@@ -3178,7 +3181,7 @@ export default function App() {
       newSession();
       setNotice('Worktree 已清理');
     } catch (removeError: any) {
-      setError(removeError?.message || String(removeError));
+      setError(friendlyClientError(removeError));
     } finally {
       setWorktreeBusy(false);
     }
@@ -3329,7 +3332,7 @@ export default function App() {
       refreshSections();
       refreshThreads();
     } catch (sectionError: any) {
-      setError(sectionError?.message || String(sectionError));
+      setError(friendlyClientError(sectionError));
     }
   }, [refreshSections, refreshThreads, sectionDialog]);
 
@@ -3393,7 +3396,7 @@ export default function App() {
       setStatus(refreshed.online ? 'ready' : 'offline');
       refreshThreads();
     } catch (saveError: any) {
-      setError(saveError?.message || String(saveError));
+      setError(friendlyClientError(saveError));
     } finally {
       setKeySaving(false);
     }
@@ -3505,7 +3508,7 @@ export default function App() {
           setWorktree(info);
           effectiveCwd = info.path;
         } catch (worktreeError: any) {
-          setError(worktreeError?.message || String(worktreeError));
+          setError(friendlyClientError(worktreeError));
           return;
         } finally {
           setPreparing(false);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, ArrowLeft, Loader2, Search } from 'lucide-react';
 import type { AppConfig, ModelInfo, RuntimeSettings, SettingsTab } from './types';
+import { friendlyClientError } from './lib/errors';
 import { effortLabel, formatTokens } from './lib/format';
 
 export function SettingsPanel({
@@ -82,7 +83,7 @@ export function SettingsPanel({
       const response = await window.codex.request('experimentalFeature/list', { limit: 100 });
       setFeatures(response?.data || []);
     } catch (error: any) {
-      setSettingsNotice(error?.message || String(error));
+      setSettingsNotice(friendlyClientError(error));
     } finally {
       setFeaturesLoading(false);
     }
@@ -153,7 +154,7 @@ export function SettingsPanel({
       });
       await loadFeatures();
     } catch (error: any) {
-      setSettingsNotice(error?.message || String(error));
+      setSettingsNotice(friendlyClientError(error));
     } finally {
       setFeatureBusy(null);
     }
@@ -454,7 +455,7 @@ export function SettingsPanel({
                     await window.codex.restartEngine();
                     setSettingsNotice('引擎已重启');
                   } catch (error: any) {
-                    setSettingsNotice(error?.message || String(error));
+                    setSettingsNotice(friendlyClientError(error));
                   } finally {
                     setEngineBusy(false);
                   }

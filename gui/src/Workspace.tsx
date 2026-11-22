@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { Highlight, Prism, themes } from 'prism-react-renderer';
 import type { FileContent, FileEntry } from './types';
+import { friendlyClientError } from './lib/errors';
 import { readStorage, writeStorage } from './lib/storage';
 
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {
@@ -135,7 +136,7 @@ export function FilesPanel({
         setDirs((previous) => ({ ...previous, [relPath]: result.entries }));
         setTreeError(null);
       } catch (error: any) {
-        setTreeError(error?.message || String(error));
+        setTreeError(friendlyClientError(error));
       } finally {
         setLoading((previous) => {
           const next = new Set(previous);
@@ -231,7 +232,7 @@ export function FilesPanel({
       setPreview(result);
     } catch (error: any) {
       setPreview(null);
-      setPreviewError(error?.message || String(error));
+      setPreviewError(friendlyClientError(error));
     } finally {
       setPreviewLoading(false);
     }
