@@ -207,6 +207,12 @@ function getJson(url) {
   await sleep(400);
 
   await evaluate(
+    "window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',ctrlKey:true,bubbles:true})); true",
+  );
+  await sleep(1200);
+  check('内置浏览器挂载', await evaluate("!!document.querySelector('.browser-frame')"));
+
+  await evaluate(
     "(()=>{const trigger=document.querySelector('.thread-heading-actions button'); if(!trigger) return false; trigger.focus(); trigger.click(); return true;})()",
   );
   await sleep(200);
@@ -228,6 +234,10 @@ function getJson(url) {
     JSON.stringify(dialog),
   );
   check(
+    '弹窗遮挡内置浏览器',
+    (await evaluate("document.querySelector('.browser-frame')?.style.visibility")) === 'hidden',
+  );
+  check(
     '弹窗焦点陷阱',
     await evaluate(
       "(()=>{const overlay=document.querySelector('.key-overlay'); if(!overlay) return false; const items=[...overlay.querySelectorAll('button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled])')].filter(e=>e.getClientRects().length>0); if(items.length<2) return false; const last=items[items.length-1]; last.focus(); last.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true})); return document.activeElement===items[0];})()",
@@ -239,12 +249,12 @@ function getJson(url) {
   await sleep(300);
   const dialogClosed = JSON.parse(
     await evaluate(
-      "JSON.stringify({dialog:!!document.querySelector('.key-overlay'),focusRestored:document.activeElement===document.querySelector('.thread-heading-actions button')})",
+      "JSON.stringify({dialog:!!document.querySelector('.key-overlay'),focusRestored:document.activeElement===document.querySelector('.thread-heading-actions button'),browserVisible:document.querySelector('.browser-frame')?.style.visibility !== 'hidden'})",
     ),
   );
   check(
     'Esc 关闭并恢复焦点',
-    !dialogClosed.dialog && dialogClosed.focusRestored,
+    !dialogClosed.dialog && dialogClosed.focusRestored && dialogClosed.browserVisible,
     JSON.stringify(dialogClosed),
   );
 

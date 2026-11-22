@@ -718,15 +718,29 @@ export function BrowserPanel({ active }: { active: boolean }) {
 
   useEffect(() => {
     if (!visited) return;
-    const swallow = () => {
+    let frame = 0;
+    let hidden: boolean | null = null;
+    const apply = () => {
+      frame = 0;
       const view = viewRef.current;
       if (!view) return;
-      view.style.visibility = document.querySelector('.key-overlay') ? 'hidden' : 'visible';
+      const next = Boolean(document.querySelector('.key-overlay'));
+      if (next === hidden) return;
+      hidden = next;
+      view.style.visibility = next ? 'hidden' : 'visible';
     };
-    swallow();
-    const observer = new MutationObserver(swallow);
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(apply);
+    };
+    schedule();
+    const observer = new MutationObserver(schedule);
+    const appFrame = document.querySelector('.app-frame');
+    if (appFrame) observer.observe(appFrame, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true });
+    return () => {
+      observer.disconnect();
+      if (frame) window.cancelAnimationFrame(frame);
+    };
   }, [visited]);
 
   const go = (value: string) => {

@@ -101,14 +101,6 @@ body::before {
   font-style: italic;
 }
 
-.brand-sub {
-  margin-top: 5px;
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.24em;
-  color: var(--muted);
-}
-
 .new-session {
   display: flex;
   align-items: center;
@@ -1594,11 +1586,6 @@ body::before {
   vertical-align: 2px;
 }
 
-.brand-sub {
-  letter-spacing: 0.2em;
-  color: var(--faint);
-}
-
 .brand-mark {
   border-color: rgba(79, 159, 131, 0.5);
   color: var(--copper);
@@ -2280,11 +2267,6 @@ body::before {
 .brand-badge {
   border-color: var(--line);
   background: #171719;
-  color: var(--muted);
-}
-
-.brand-sub {
-  display: block;
   color: var(--muted);
 }
 
@@ -5111,35 +5093,6 @@ pre::-webkit-scrollbar-button,
   font-weight: 500;
 }
 
-.settings-tabs {
-  display: flex;
-  gap: 4px;
-  margin: 4px 0 10px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--line-soft);
-}
-
-.settings-tabs button {
-  padding: 5px 9px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--muted);
-  font-family: var(--sans);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.settings-tabs button:hover {
-  background: #1d1d20;
-  color: var(--ink);
-}
-
-.settings-tabs button.active {
-  background: #242428;
-  color: var(--ink);
-}
-
 .main.page-mode {
   display: flex;
   flex-direction: column;
@@ -5867,12 +5820,6 @@ pre::-webkit-scrollbar-button,
 .switch:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.brand-chevron {
-  margin-left: 4px;
-  color: var(--muted);
-  vertical-align: middle;
 }
 
 .settings-pane.hidden {

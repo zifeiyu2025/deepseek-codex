@@ -1257,7 +1257,6 @@ export default function App() {
       return 'default';
     }
   });
-  const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [collaborationModes, setCollaborationModes] = useState<CollaborationModeInfo[]>([]);
   const [pinnedSectionId, setPinnedSectionId] = useState<string | null>(null);
   const [sections, setSections] = useState<{ id: string; name: string }[]>([]);
@@ -1299,7 +1298,6 @@ export default function App() {
   const [threadHeadingMenu, setThreadHeadingMenu] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [railQuick, setRailQuick] = useState('');
-  const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
 
   useEffect(() => {
     if (!headerMenuOpen) return;
@@ -1542,17 +1540,16 @@ export default function App() {
   }, [refreshGitInfo]);
 
   useEffect(() => {
-    if (!modelMenuOpen && !attachMenuOpen && !modeMenuOpen && !projectMenuId) return;
+    if (!modelMenuOpen && !attachMenuOpen && !projectMenuId) return;
     const close = (event: MouseEvent) => {
       const target = event.target as Element;
       if (modelMenuOpen && !target.closest('.model-pill-wrap')) setModelMenuOpen(false);
       if (attachMenuOpen && !target.closest('.attach-wrap')) setAttachMenuOpen(false);
-      if (modeMenuOpen && !target.closest('.mode-wrap')) setModeMenuOpen(false);
       if (projectMenuId && !target.closest('.project-wrap')) setProjectMenuId(null);
     };
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
-  }, [attachMenuOpen, modeMenuOpen, modelMenuOpen, projectMenuId]);
+  }, [attachMenuOpen, modelMenuOpen, projectMenuId]);
 
   useEffect(() => {
     if (!menuThreadId && !sectionMenuId) return;
@@ -3974,7 +3971,7 @@ export default function App() {
           </div>
         </div>
 
-        {!searchOpen && (sidebarSearchOpen || threadQuery) ? (
+        {!searchOpen && threadQuery ? (
           <label className="thread-search">
             <Search size={12} />
             <input
