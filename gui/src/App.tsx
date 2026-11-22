@@ -52,8 +52,10 @@ import {
 } from 'lucide-react';
 import { BrowserPanel, FilesPanel } from './Workspace';
 import { ReviewPanel } from './ReviewPanel';
+import { ApprovalPanel } from './components/ApprovalPanel';
 import { AutomationsPage } from './components/AutomationsPage';
 import { Composer } from './components/Composer';
+import { Hero } from './components/Hero';
 import { ActivityStep, MessageItem } from './components/Messages';
 import { Modal } from './components/Modal';
 import { ThreadActions } from './components/ThreadActions';
@@ -143,53 +145,6 @@ function loadAutomations(): Automation[] {
 
 function saveAutomations(list: Automation[]) {
   writeJsonStorage('deepseek-codex.automations', list);
-}
-
-function ApprovalPanel({
-  approval,
-  onDecide,
-}: {
-  approval: ApprovalRequest;
-  onDecide: (decision: string) => void;
-}) {
-  const title =
-    approval.kind === 'command'
-      ? '命令执行需要确认'
-      : approval.kind === 'file'
-        ? '文件修改需要确认'
-        : '需要额外权限';
-  return (
-    <div className="approval">
-      <div className="approval-head">
-        <ShieldAlert size={16} />
-        <span>{title}</span>
-      </div>
-      {approval.command ? <pre>{approval.command}</pre> : null}
-      {approval.kind === 'permissions' && approval.permissions ? (
-        <pre>{JSON.stringify(approval.permissions, null, 2)}</pre>
-      ) : null}
-      {approval.cwd ? <div className="approval-meta">目录 · {approval.cwd}</div> : null}
-      {approval.grantRoot ? <div className="approval-meta">范围 · {approval.grantRoot}</div> : null}
-      {approval.reason ? <div className="approval-meta">原因 · {approval.reason}</div> : null}
-      <div className="approval-actions">
-        <button className="decline" onClick={() => onDecide('decline')}>
-          <X size={14} /> 拒绝
-        </button>
-        <button onClick={() => onDecide('acceptForSession')}>本会话允许</button>
-        <button className="accept" onClick={() => onDecide('accept')}>
-          <Check size={14} /> {approval.kind === 'permissions' ? '本次允许' : '允许'}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function Hero() {
-  return (
-    <div className="hero">
-      <h1>我们该做些什么？</h1>
-    </div>
-  );
 }
 
 export default function App() {
@@ -851,7 +806,7 @@ export default function App() {
     [],
   );
 
-  const refreshThreads = useCallback(async () => {
+  const refreshThreads = useCallback(async (announce = false) => {
     try {
       const params: Record<string, unknown> = {
         limit: 50,
@@ -864,8 +819,8 @@ export default function App() {
       setThreads(response?.data || []);
       setThreadCursor(response?.nextCursor || null);
       setReadStates(response?.readStates || {});
-    } catch {
-      /* history is best-effort */
+    } catch (error) {
+      if (announce) setError(friendlyClientError(error));
     }
   }, []);
 
@@ -2932,7 +2887,7 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => {
-                    refreshThreads();
+                    void refreshThreads(true);
                     setThreadHeadingMenu(false);
                   }}
                 >
