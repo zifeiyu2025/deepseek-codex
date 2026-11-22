@@ -103,6 +103,15 @@ export type RuntimeSettings = {
   effort: 'low' | 'high' | 'max';
 };
 
+export type SettingsTab =
+  | 'runtime'
+  | 'appearance'
+  | 'notifications'
+  | 'features'
+  | 'shortcuts'
+  | 'diagnostics'
+  | 'about';
+
 export type UserInputOption = {
   label: string;
   description?: string;
