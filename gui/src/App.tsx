@@ -2,6 +2,7 @@ import {
   Children,
   Fragment,
   isValidElement,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -409,7 +410,8 @@ function LocalImage({
   );
 }
 
-function DiffView({ diff }: { diff: string }) {  const lines = (diff || '').split('\n');
+const DiffView = memo(function DiffView({ diff }: { diff: string }) {
+  const lines = (diff || '').split('\n');
   return (
     <pre className="diff">
       {lines.map((line, index) => {
@@ -432,7 +434,7 @@ function DiffView({ diff }: { diff: string }) {  const lines = (diff || '').spli
       })}
     </pre>
   );
-}
+});
 
 function ToolCard({
   icon,
@@ -565,7 +567,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
-function Markdown({ text }: { text: string }) {
+const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -590,7 +592,7 @@ function Markdown({ text }: { text: string }) {
       {text}
     </ReactMarkdown>
   );
-}
+});
 
 const ACTIVITY_TYPES = new Set([
   'reasoning',
@@ -2205,6 +2207,7 @@ export default function App() {
   const pendingUserRef = useRef<string | null>(null);
   const gitRequestRef = useRef(0);
   const streamRef = useRef<HTMLElement>(null);
+  const streamAtBottomRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -3260,9 +3263,24 @@ export default function App() {
   }, [attachments, thumbnails]);
 
   useEffect(() => {
+    streamAtBottomRef.current = true;
     const element = streamRef.current;
     if (element) element.scrollTop = element.scrollHeight;
+  }, [threadId]);
+
+  useEffect(() => {
+    const element = streamRef.current;
+    if (element && streamAtBottomRef.current) {
+      element.scrollTop = element.scrollHeight;
+    }
   }, [items, running, approval, pendingInput]);
+
+  const handleStreamScroll = useCallback(() => {
+    const element = streamRef.current;
+    if (!element) return;
+    streamAtBottomRef.current =
+      element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+  }, []);
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -4254,6 +4272,7 @@ export default function App() {
     }
 
     setInput('');
+    streamAtBottomRef.current = true;
     const localId = `local-${Date.now()}`;
     itemTimesRef.current[localId] = Math.floor(Date.now() / 1000);
     pendingUserRef.current = localId;
@@ -4465,39 +4484,45 @@ export default function App() {
     [resumeThread, threadQuery],
   );
 
-  const visibleItems = items.slice(Math.max(0, items.length - visibleItemCount));
-  const itemGroups: (
-    | { kind: 'single'; item: Item }
-    | { kind: 'activity'; items: Item[]; key: string }
-  )[] = [];
-  const turns: Item[][] = [];
-  let currentTurn: Item[] = [];
-  for (const item of visibleItems) {
-    if (item.type === 'userMessage' && currentTurn.length > 0) {
-      turns.push(currentTurn);
-      currentTurn = [];
-    }
-    currentTurn.push(item);
-  }
-  if (currentTurn.length > 0) turns.push(currentTurn);
-  for (const turn of turns) {
-    const activities = turn.filter((item) => isActivityItem(item));
-    const hasTools = activities.some((item) => item.type !== 'reasoning');
-    const activityGroup = hasTools
-      ? { kind: 'activity' as const, items: activities, key: `activity-${activities[0].id}` }
-      : null;
-    let activityInserted = false;
-    for (const item of turn) {
-      if (isActivityItem(item)) {
-        if (activityGroup && !activityInserted) {
-          itemGroups.push(activityGroup);
-          activityInserted = true;
-        }
-        continue;
+  const visibleItems = useMemo(
+    () => items.slice(Math.max(0, items.length - visibleItemCount)),
+    [items, visibleItemCount],
+  );
+  const itemGroups = useMemo(() => {
+    const groups: (
+      | { kind: 'single'; item: Item }
+      | { kind: 'activity'; items: Item[]; key: string }
+    )[] = [];
+    const turns: Item[][] = [];
+    let currentTurn: Item[] = [];
+    for (const item of visibleItems) {
+      if (item.type === 'userMessage' && currentTurn.length > 0) {
+        turns.push(currentTurn);
+        currentTurn = [];
       }
-      itemGroups.push({ kind: 'single', item });
+      currentTurn.push(item);
     }
-  }
+    if (currentTurn.length > 0) turns.push(currentTurn);
+    for (const turn of turns) {
+      const activities = turn.filter((item) => isActivityItem(item));
+      const hasTools = activities.some((item) => item.type !== 'reasoning');
+      const activityGroup = hasTools
+        ? { kind: 'activity' as const, items: activities, key: `activity-${activities[0].id}` }
+        : null;
+      let activityInserted = false;
+      for (const item of turn) {
+        if (isActivityItem(item)) {
+          if (activityGroup && !activityInserted) {
+            groups.push(activityGroup);
+            activityInserted = true;
+          }
+          continue;
+        }
+        groups.push({ kind: 'single', item });
+      }
+    }
+    return groups;
+  }, [visibleItems]);
 
   const railTabs: { id: RailTab; label: string; icon: ReactNode; shortcut?: string }[] = [
     { id: 'files', label: '文件', icon: <FolderOpen size={13} />, shortcut: 'Ctrl+P' },
@@ -5256,7 +5281,7 @@ export default function App() {
           </div>
         ) : null}
 
-        <section className="stream" ref={streamRef}>
+        <section className="stream" ref={streamRef} onScroll={handleStreamScroll}>
           {items.length === 0 ? (
             <Hero />
           ) : (
