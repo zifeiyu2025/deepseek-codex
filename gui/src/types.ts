@@ -112,6 +112,13 @@ export type SettingsTab =
   | 'diagnostics'
   | 'about';
 
+export type MentionState = {
+  query: string;
+  tokenStart: number;
+  index: number;
+  results: { path: string; fileName: string }[];
+};
+
 export type UserInputOption = {
   label: string;
   description?: string;
