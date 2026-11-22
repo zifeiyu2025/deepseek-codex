@@ -191,6 +191,32 @@ function getJson(url) {
   await sleep(500);
 
   await evaluate(
+    "[...document.querySelectorAll('.nav-row')].find(e=>e.textContent.includes('定时任务'))?.click(); true",
+  );
+  await sleep(500);
+  check(
+    '定时任务页',
+    (await evaluate("document.querySelector('.page-view h1')?.textContent")) === '定时任务',
+  );
+  await evaluate("document.querySelector('.page-view .page-ghost')?.click(); true");
+  await sleep(300);
+
+  await evaluate(
+    "[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='用引擎审查代码变更')?.click(); true",
+  );
+  await sleep(300);
+  check(
+    '审查弹窗',
+    (await evaluate("document.querySelector('.key-overlay')?.getAttribute('aria-labelledby')")) ===
+      'review-dialog-title',
+  );
+  await evaluate(
+    "(()=>{const active=document.activeElement; active?.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); return true;})()",
+  );
+  await sleep(300);
+  check('审查弹窗 Esc 关闭', !(await evaluate("!!document.querySelector('.key-overlay')")));
+
+  await evaluate(
     "[...document.querySelectorAll('.nav-row')].find(e=>e.textContent.includes('插件'))?.click(); true",
   );
   await sleep(2500);
