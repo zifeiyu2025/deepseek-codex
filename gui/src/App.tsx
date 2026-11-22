@@ -60,6 +60,39 @@ import {
 import { BrowserPanel, FilesPanel } from './Workspace';
 import { ReviewPanel } from './ReviewPanel';
 import { TerminalDock } from './TerminalDock';
+import { playCompletionChime } from './lib/audio';
+import { friendlyClientError } from './lib/errors';
+import {
+  approvalLabel,
+  automationScheduleLabel,
+  cleanSnippet,
+  collaborationModeLabel,
+  effortLabel,
+  formatThreadTime,
+  formatTokens,
+  nextRunLabel,
+  sandboxLabel,
+  sandboxPolicyFor,
+  splitReviewComments,
+  textOfContent,
+  timeAgo,
+} from './lib/format';
+import {
+  activitySummary,
+  appendOutputDelta,
+  appendReasoningDelta,
+  appendTextDelta,
+  isActivityItem,
+  itemOutput,
+  upsertItem,
+} from './lib/items';
+import {
+  readJsonStorage,
+  readStorage,
+  removeStorage,
+  writeJsonStorage,
+  writeStorage,
+} from './lib/storage';
 import type {
   AppConfig,
   ApprovalRequest,
@@ -87,262 +120,25 @@ const DEFAULT_SETTINGS: RuntimeSettings = {
 };
 
 function loadSettings(): RuntimeSettings {
-  try {
-    const raw = localStorage.getItem('deepseek-codex.settings');
-    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
-  } catch {
-    /* ignore */
-  }
-  return DEFAULT_SETTINGS;
+  const saved = readJsonStorage<Partial<RuntimeSettings> | null>(
+    'deepseek-codex.settings',
+    null,
+  );
+  return saved ? { ...DEFAULT_SETTINGS, ...saved } : DEFAULT_SETTINGS;
 }
 
 function loadAutomations(): Automation[] {
-  try {
-    const raw = localStorage.getItem('deepseek-codex.automations');
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map((entry: Automation) =>
-      entry.lastStatus === 'running'
-        ? { ...entry, lastStatus: 'error', lastError: '上次运行未完成' }
-        : entry,
-    );
-  } catch {
-    return [];
-  }
+  const parsed = readJsonStorage<Automation[]>('deepseek-codex.automations', []);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map((entry) =>
+    entry.lastStatus === 'running'
+      ? { ...entry, lastStatus: 'error', lastError: '上次运行未完成' }
+      : entry,
+  );
 }
 
 function saveAutomations(list: Automation[]) {
-  try {
-    localStorage.setItem('deepseek-codex.automations', JSON.stringify(list));
-  } catch {
-    /* ignore */
-  }
-}
-
-function automationScheduleLabel(minutes: number): string {
-  if (!minutes) return '手动';
-  if (minutes === 15) return '每 15 分钟';
-  if (minutes === 60) return '每小时';
-  if (minutes === 360) return '每 6 小时';
-  if (minutes === 1440) return '每天';
-  return `每 ${minutes} 分钟`;
-}
-
-function nextRunLabel(next?: number): string {
-  if (!next) return '';
-  const diff = next * 1000 - Date.now();
-  if (diff <= 0) return '即将执行';
-  if (diff < 3600_000) return `${Math.max(1, Math.round(diff / 60_000))} 分钟后`;
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)} 小时后`;
-  return `${Math.round(diff / 86_400_000)} 天后`;
-}
-
-function textOfContent(content: unknown): string {
-  if (!content) return '';
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part: any) => {
-        if (!part) return '';
-        if (part.type === 'text') return part.text || '';
-        if (typeof part.text === 'string') return part.text;
-        if (part.type === 'image' || part.type === 'localImage' || part.type === 'image_url') {
-          return '';
-        }
-        return '';
-      })
-      .join('');
-  }
-  return '';
-}
-
-function itemOutput(item: Item): string {
-  const raw = item.aggregatedOutput ?? item.output ?? item.result ?? '';
-  if (typeof raw === 'string') return raw;
-  if (raw == null) return '';
-  try {
-    return JSON.stringify(raw, null, 2);
-  } catch {
-    return String(raw);
-  }
-}
-
-function cleanSnippet(value: string | null | undefined): string {
-  return (value || '')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function splitReviewComments(markdown: string): string[] {
-  if (!markdown) return [];
-  return markdown
-    .split(/\n(?=\s*(?:[-*•]|\d+[.)])\s+)/)
-    .filter((block) => /^\s*(?:[-*•]|\d+[.)])\s+/.test(block) && block.trim().length > 0);
-}
-
-function upsertItem(list: Item[], item: Item): Item[] {
-  const index = list.findIndex((entry) => entry.id === item.id);
-  if (index < 0) return [...list, item];
-  const next = [...list];
-  next[index] = { ...next[index], ...item, streaming: false };
-  return next;
-}
-
-function appendTextDelta(list: Item[], itemId: string, delta: string): Item[] {
-  const index = list.findIndex((entry) => entry.id === itemId);
-  if (index < 0) {
-    return [...list, { id: itemId, type: 'agentMessage', text: delta, streaming: true }];
-  }
-  const next = [...list];
-  const existing = next[index];
-  next[index] = { ...existing, text: (existing.text || '') + delta, streaming: true };
-  return next;
-}
-
-function appendReasoningDelta(list: Item[], itemId: string, delta: string): Item[] {
-  const index = list.findIndex((entry) => entry.id === itemId);
-  if (index < 0) {
-    return [
-      ...list,
-      { id: itemId, type: 'reasoning', summary: [], content: [delta], streaming: true },
-    ];
-  }
-  const next = [...list];
-  const existing = next[index];
-  const content = [...(existing.content || [])];
-  if (content.length === 0) content.push('');
-  content[content.length - 1] += delta;
-  next[index] = { ...existing, content, streaming: true };
-  return next;
-}
-
-function appendOutputDelta(list: Item[], itemId: string, delta: string): Item[] {
-  const index = list.findIndex((entry) => entry.id === itemId);
-  if (index < 0) return list;
-  const next = [...list];
-  const existing = next[index];
-  next[index] = {
-    ...existing,
-    aggregatedOutput: (existing.aggregatedOutput || '') + delta,
-  };
-  return next;
-}
-
-let completionAudioContext: AudioContext | null = null;
-
-function playCompletionChime() {
-  try {
-    const AudioCtx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioCtx) return;
-    if (!completionAudioContext || completionAudioContext.state === 'closed') {
-      completionAudioContext = new AudioCtx();
-    }
-    const ctx = completionAudioContext;
-    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-    const start = ctx.currentTime + 0.02;
-    [880, 1174.66].forEach((frequency, index) => {
-      const oscillator = ctx.createOscillator();
-      const gain = ctx.createGain();
-      oscillator.type = 'sine';
-      oscillator.frequency.value = frequency;
-      const at = start + index * 0.16;
-      gain.gain.setValueAtTime(0.0001, at);
-      gain.gain.exponentialRampToValueAtTime(0.12, at + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.22);
-      oscillator.connect(gain);
-      gain.connect(ctx.destination);
-      oscillator.start(at);
-      oscillator.stop(at + 0.24);
-    });
-  } catch {
-    /* audio unavailable */
-  }
-}
-
-function friendlyClientError(error: unknown): string {
-  const raw = (error instanceof Error ? error.message : String(error)).replace(
-    /^Error invoking remote method '[^']+':\s*(Error:\s*)?/,
-    '',
-  );
-  if (/already has an active writer/i.test(raw)) {
-    return '该会话正被另一个 Codex 客户端（如官方桌面端）占用。请在对方关闭该会话或退出后重试，或切换到其他会话。';
-  }
-  return raw;
-}
-
-function timeAgo(seconds?: number): string {
-  if (!seconds) return '';
-  const diff = Math.max(0, Math.floor(Date.now() / 1000 - seconds));
-  if (diff < 60) return '刚刚';
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-  return `${Math.floor(diff / 86400)}d`;
-}
-
-function formatThreadTime(seconds?: number): string {
-  if (!seconds) return '';
-  const date = new Date(seconds * 1000);
-  const now = new Date();
-  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-  if (date.toDateString() === now.toDateString()) return time;
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  if (date.toDateString() === yesterday.toDateString()) return `昨天 ${time}`;
-  return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
-}
-
-function formatTokens(value?: number | null): string {
-  if (!value) return '0';
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-  return `${value}`;
-}
-
-function approvalLabel(policy: RuntimeSettings['approvalPolicy']): string {
-  if (policy === 'never') return '自主执行';
-  if (policy === 'untrusted') return '全部确认';
-  return '按需确认';
-}
-
-function sandboxLabel(sandbox: RuntimeSettings['sandbox']): string {
-  if (sandbox === 'read-only') return '只读';
-  if (sandbox === 'workspace-write') return '工作区可写';
-  return '完全访问';
-}
-
-function sandboxPolicyFor(sandbox: RuntimeSettings['sandbox']): Record<string, unknown> {
-  if (sandbox === 'read-only') {
-    return { type: 'readOnly', networkAccess: false };
-  }
-  if (sandbox === 'workspace-write') {
-    return {
-      type: 'workspaceWrite',
-      writableRoots: [],
-      networkAccess: false,
-      excludeTmpdirEnvVar: false,
-      excludeSlashTmp: false,
-    };
-  }
-  return { type: 'dangerFullAccess' };
-}
-
-function effortLabel(value: string): string {
-  const labels: Record<string, string> = {
-    low: '低',
-    medium: '中',
-    high: '高',
-    xhigh: '极高',
-    ultra: '极强',
-    max: '最大',
-  };
-  return labels[value] || value;
-}
-
-function collaborationModeLabel(value: string | null | undefined): string {
-  return value === 'plan' ? '计划' : '执行';
+  writeJsonStorage('deepseek-codex.automations', list);
 }
 
 function StatusPill({ status }: { status?: string }) {
@@ -596,39 +392,6 @@ const Markdown = memo(function Markdown({ text }: { text: string }) {
     </ReactMarkdown>
   );
 });
-
-const ACTIVITY_TYPES = new Set([
-  'reasoning',
-  'commandExecution',
-  'fileChange',
-  'mcpToolCall',
-  'dynamicToolCall',
-  'webSearch',
-  'imageGeneration',
-]);
-
-function isActivityItem(item: Item): boolean {
-  return ACTIVITY_TYPES.has(item.type);
-}
-
-function activitySummary(list: Item[]): string {
-  const steps = list.filter((item) => item.type !== 'reasoning').length;
-  if (steps === 0) return '思考过程';
-  const commands = list.filter((item) => item.type === 'commandExecution').length;
-  const changes = list.filter((item) => item.type === 'fileChange').length;
-  const tools = list.filter(
-    (item) => item.type === 'mcpToolCall' || item.type === 'dynamicToolCall',
-  ).length;
-  const web = list.filter((item) => item.type === 'webSearch').length;
-  const others = steps - commands - changes - tools - web;
-  const parts: string[] = [];
-  if (commands) parts.push(`运行了 ${commands} 条命令`);
-  if (changes) parts.push(`编辑了 ${changes} 个文件`);
-  if (tools) parts.push(`调用了 ${tools} 个工具`);
-  if (web) parts.push('搜索了网页');
-  if (others > 0) parts.push(`${others} 个步骤`);
-  return parts.join(' · ');
-}
 
 function MessageItem({
   item,
@@ -2007,7 +1770,7 @@ export default function App() {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [projectId, setProjectId] = useState<string | null>(() => {
     try {
-      return localStorage.getItem('deepseek-codex.project');
+      return readStorage('deepseek-codex.project');
     } catch {
       return null;
     }
@@ -2017,7 +1780,7 @@ export default function App() {
   const [projectRenameInput, setProjectRenameInput] = useState('');
   const [mode, setMode] = useState<'default' | 'plan'>(() => {
     try {
-      return localStorage.getItem('deepseek-codex.mode') === 'plan' ? 'plan' : 'default';
+      return readStorage('deepseek-codex.mode') === 'plan' ? 'plan' : 'default';
     } catch {
       return 'default';
     }
@@ -2040,7 +1803,7 @@ export default function App() {
   const [lastTurnId, setLastTurnId] = useState<string | null>(null);
   const [visibleItemCount, setVisibleItemCount] = useState(120);
   const [theme, setTheme] = useState<'official' | 'warm'>(() =>
-    localStorage.getItem('deepseek-codex.theme') === 'warm' ? 'warm' : 'official',
+    readStorage('deepseek-codex.theme') === 'warm' ? 'warm' : 'official',
   );
   const [items, setItems] = useState<Item[]>([]);
   const [running, setRunning] = useState(false);
@@ -2054,11 +1817,11 @@ export default function App() {
   const [keySaving, setKeySaving] = useState(false);
   const [settings, setSettings] = useState<RuntimeSettings>(loadSettings);
   const [autonomyHidden, setAutonomyHidden] = useState(() => {
-    const until = Number(localStorage.getItem('deepseek-codex.autonomyHiddenUntil') || 0);
+    const until = Number(readStorage('deepseek-codex.autonomyHiddenUntil') || 0);
     return until > Date.now();
   });
   const [notifyOnComplete, setNotifyOnComplete] = useState(
-    () => localStorage.getItem('deepseek-codex.notify') !== '0',
+    () => readStorage('deepseek-codex.notify') !== '0',
   );
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [threadHeadingMenu, setThreadHeadingMenu] = useState(false);
@@ -2083,16 +1846,16 @@ export default function App() {
     setSettingsOpen(true);
   }, []);
   const [railOpen, setRailOpen] = useState(
-    () => localStorage.getItem('deepseek-codex.rail.open') !== '0',
+    () => readStorage('deepseek-codex.rail.open') !== '0',
   );
   const [terminalOpen, setTerminalOpen] = useState(
-    () => localStorage.getItem('deepseek-codex.terminal') === '1',
+    () => readStorage('deepseek-codex.terminal') === '1',
   );
   const [terminalMounted, setTerminalMounted] = useState(
-    () => localStorage.getItem('deepseek-codex.terminal') === '1',
+    () => readStorage('deepseek-codex.terminal') === '1',
   );
   const [railTab, setRailTab] = useState<RailTab>(() => {
-    const saved = localStorage.getItem('deepseek-codex.rail.tab');
+    const saved = readStorage('deepseek-codex.rail.tab');
     return saved === 'browser' || saved === 'review' ? saved : 'files';
   });
   const [reviewCount, setReviewCount] = useState(0);
@@ -2141,7 +1904,7 @@ export default function App() {
   const [worktreeBusy, setWorktreeBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [worktreeMode, setWorktreeMode] = useState(
-    () => localStorage.getItem('deepseek-codex.worktree') === '1',
+    () => readStorage('deepseek-codex.worktree') === '1',
   );
   const [worktree, setWorktree] = useState<WorktreeInfo | null>(null);
   const [preparing, setPreparing] = useState(false);
@@ -2237,8 +2000,8 @@ export default function App() {
   useEffect(() => {
     projectIdRef.current = projectId;
     try {
-      if (projectId) localStorage.setItem('deepseek-codex.project', projectId);
-      else localStorage.removeItem('deepseek-codex.project');
+      if (projectId) writeStorage('deepseek-codex.project', projectId);
+      else removeStorage('deepseek-codex.project');
     } catch {
       /* ignore */
     }
@@ -2252,7 +2015,7 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     try {
-      localStorage.setItem('deepseek-codex.theme', theme);
+      writeStorage('deepseek-codex.theme', theme);
     } catch {
       /* ignore */
     }
@@ -2260,7 +2023,7 @@ export default function App() {
   useEffect(() => {
     modeRef.current = mode;
     try {
-      localStorage.setItem('deepseek-codex.mode', mode);
+      writeStorage('deepseek-codex.mode', mode);
     } catch {
       /* ignore */
     }
@@ -2380,9 +2143,9 @@ export default function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem('deepseek-codex.rail.open', railOpen ? '1' : '0');
-      localStorage.setItem('deepseek-codex.rail.tab', railTab);
-      localStorage.setItem('deepseek-codex.terminal', terminalOpen ? '1' : '0');
+      writeStorage('deepseek-codex.rail.open', railOpen ? '1' : '0');
+      writeStorage('deepseek-codex.rail.tab', railTab);
+      writeStorage('deepseek-codex.terminal', terminalOpen ? '1' : '0');
     } catch {
       /* ignore */
     }
@@ -3340,7 +3103,7 @@ export default function App() {
   const applySettings = useCallback((next: RuntimeSettings) => {
     setSettings(next);
     try {
-      localStorage.setItem('deepseek-codex.settings', JSON.stringify(next));
+      writeJsonStorage('deepseek-codex.settings', next);
     } catch {
       /* ignore */
     }
@@ -3579,7 +3342,7 @@ export default function App() {
     setWorktreeMode((previous) => {
       const next = !previous;
       try {
-        localStorage.setItem('deepseek-codex.worktree', next ? '1' : '0');
+        writeStorage('deepseek-codex.worktree', next ? '1' : '0');
       } catch {
         /* ignore */
       }
@@ -5412,7 +5175,7 @@ export default function App() {
               <button
                 className="autonomy-dismiss"
                 onClick={() => {
-                  localStorage.setItem(
+                  writeStorage(
                     'deepseek-codex.autonomyHiddenUntil',
                     String(Date.now() + 28 * 24 * 60 * 60 * 1000),
                   );
@@ -5887,7 +5650,7 @@ export default function App() {
           initialTab={settingsInitialTab}
           notifyOnComplete={notifyOnComplete}
           onNotifyOnComplete={(value) => {
-            localStorage.setItem('deepseek-codex.notify', value ? '1' : '0');
+            writeStorage('deepseek-codex.notify', value ? '1' : '0');
             setNotifyOnComplete(value);
           }}
           onOpenKey={() => {

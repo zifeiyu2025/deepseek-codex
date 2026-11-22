@@ -9,6 +9,7 @@ import {
   ArrowUp,
 } from 'lucide-react';
 import type { GitReview, ReviewFile, ReviewScope } from './types';
+import { readStorage, writeStorage } from './lib/storage';
 
 type Scope = ReviewScope | 'thread';
 
@@ -114,7 +115,7 @@ export function ReviewPanel({
   onCountChange?: (count: number) => void;
 }) {
   const [scope, setScope] = useState<Scope>(() => {
-    const saved = localStorage.getItem('deepseek-codex.review.scope');
+    const saved = readStorage('deepseek-codex.review.scope');
     return saved === 'staged' || saved === 'branch' || saved === 'thread' ? saved : 'unstaged';
   });
   const [data, setData] = useState<GitReview | null>(null);
@@ -158,11 +159,7 @@ export function ReviewPanel({
   }, [active, load, onCountChange, refreshToken, scope, threadChanges.length]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('deepseek-codex.review.scope', scope);
-    } catch {
-      /* ignore */
-    }
+    writeStorage('deepseek-codex.review.scope', scope);
   }, [scope]);
 
   useEffect(() => {

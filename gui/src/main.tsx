@@ -9,13 +9,10 @@ import '@fontsource/ibm-plex-mono/400.css';
 import '@fontsource/ibm-plex-mono/500.css';
 import './styles.css';
 import App from './App';
+import { readStorage } from './lib/storage';
 
-try {
-  document.documentElement.dataset.theme =
-    localStorage.getItem('deepseek-codex.theme') === 'warm' ? 'warm' : 'official';
-} catch {
-  document.documentElement.dataset.theme = 'official';
-}
+document.documentElement.dataset.theme =
+  readStorage('deepseek-codex.theme') === 'warm' ? 'warm' : 'official';
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

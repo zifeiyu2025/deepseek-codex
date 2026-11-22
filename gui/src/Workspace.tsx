@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { Highlight, Prism, themes } from 'prism-react-renderer';
 import type { FileContent, FileEntry } from './types';
+import { readStorage, writeStorage } from './lib/storage';
 
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   ts: 'tsx',
@@ -620,8 +621,7 @@ const BROWSER_PRESETS = [
 ];
 
 export function BrowserPanel({ active }: { active: boolean }) {
-  const initial =
-    localStorage.getItem('deepseek-codex.browserUrl') || 'http://localhost:3000';
+  const initial = readStorage('deepseek-codex.browserUrl') || 'http://localhost:3000';
   const [url, setUrl] = useState(initial);
   const [draft, setDraft] = useState(initial);
   const [urlError, setUrlError] = useState<string | null>(null);
@@ -656,7 +656,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
           setUrl(current);
           setDraft(current);
           setTitle(view.getTitle() || '');
-          localStorage.setItem('deepseek-codex.browserUrl', current);
+          writeStorage('deepseek-codex.browserUrl', current);
         }
       } catch {
         /* webview may not be ready */
@@ -739,11 +739,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
     setUrl(normalized);
     setDraft(normalized);
     setVisited(true);
-    try {
-      localStorage.setItem('deepseek-codex.browserUrl', normalized);
-    } catch {
-      /* ignore */
-    }
+    writeStorage('deepseek-codex.browserUrl', normalized);
     const view = viewRef.current;
     if (view) {
       view.loadURL(normalized).catch((error: Error) => setUrlError(error.message));
