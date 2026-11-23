@@ -36,6 +36,7 @@ import {
   ShieldCheck,
   Target,
   Trash2,
+  Users,
   X,
 } from 'lucide-react';
 import type {
@@ -44,6 +45,7 @@ import type {
   RuntimeSettings,
   SlashCommandId,
   ThreadGoal,
+  ThreadSummary,
 } from '../types';
 import { effortLabel } from '../lib/format';
 import { writeStorage } from '../lib/storage';
@@ -74,6 +76,7 @@ export function Composer({
   ocrBusy,
   onKeyDown,
   onOpenGoal,
+  onOpenSubagents,
   onSlashCommand,
   openCapabilities,
   openSettings,
@@ -99,6 +102,7 @@ export function Composer({
   setRailOpen,
   setSearchOpen,
   settings,
+  subagents,
   textareaRef,
   thumbnails,
   toggleWorktree,
@@ -129,6 +133,7 @@ export function Composer({
   ocrBusy: boolean;
   onKeyDown: (event: ReactKeyboardEvent<HTMLTextAreaElement>) => void;
   onOpenGoal: () => void;
+  onOpenSubagents: () => void;
   onSlashCommand: (id: SlashCommandId, argument?: string) => void;
   openCapabilities: () => void;
   openSettings: () => void;
@@ -156,6 +161,7 @@ export function Composer({
   setRailOpen: Dispatch<SetStateAction<boolean>>;
   setSearchOpen: Dispatch<SetStateAction<boolean>>;
   settings: RuntimeSettings;
+  subagents: ThreadSummary[];
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   thumbnails: Record<string, string>;
   toggleWorktree: () => void;
@@ -326,6 +332,14 @@ export function Composer({
         icon: <Info size={13} />,
         enabled: true,
       },
+      {
+        id: 'agents',
+        name: 'agents',
+        title: '子代理',
+        description: '查看或切换到当前会话的子代理',
+        icon: <Users size={13} />,
+        enabled: true,
+      },
     ],
     [goal, hasThread, mode, running, worktreeMode],
   );
@@ -333,11 +347,13 @@ export function Composer({
     !mention && /^\/[^\s]*$/.test(input) ? input.slice(1).toLowerCase() : null;
   const filteredSlashCommands = useMemo(() => {
     if (slashQuery === null) return [];
-    return slashCommands.filter(
+    const matches = slashCommands.filter(
       (command) =>
         command.name.startsWith(slashQuery) ||
         command.title.toLowerCase().includes(slashQuery),
     );
+    const exact = matches.find((command) => command.name === slashQuery);
+    return exact ? [exact, ...matches.filter((command) => command !== exact)] : matches;
   }, [slashCommands, slashQuery]);
   const slashOpen =
     slashQuery !== null && !slashDismissed && filteredSlashCommands.length > 0;
@@ -345,6 +361,11 @@ export function Composer({
     slashIndex,
     Math.max(0, filteredSlashCommands.length - 1),
   );
+  const activeSubagents = subagents.filter((agent) => {
+    const status = agent.status as any;
+    if (typeof status === 'string') return /active|running/i.test(status);
+    return Boolean(status && typeof status === 'object' && ('active' in status || 'Active' in status));
+  }).length;
 
   useEffect(() => {
     setSlashIndex(0);
@@ -523,6 +544,14 @@ export function Composer({
                 ))}
                 <div className="slash-hint">↑↓ 选择 · Enter 执行 · Esc 关闭</div>
               </div>
+            ) : null}
+            {subagents.length > 0 ? (
+              <button type="button" className="composer-agents" onClick={onOpenSubagents}>
+                <Users size={13} />
+                <span>{subagents.length} 个子代理</span>
+                <small>{activeSubagents > 0 ? `${activeSubagents} 个运行中` : '最近活动'}</small>
+                <ChevronRight size={12} />
+              </button>
             ) : null}
             {goal ? (
               <button

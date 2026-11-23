@@ -51,6 +51,10 @@ export type ThreadSummary = {
   createdAt?: number;
   updatedAt?: number;
   status?: unknown;
+  parentThreadId?: string | null;
+  agentNickname?: string | null;
+  agentRole?: string | null;
+  threadSource?: string | null;
   turns?: Turn[];
 };
 
@@ -154,6 +158,7 @@ export type SlashCommandId =
   | 'mcp'
   | 'init'
   | 'status'
+  | 'agents'
   | 'chat'
   | 'delete'
   | 'pin'

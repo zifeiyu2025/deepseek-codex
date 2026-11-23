@@ -48,6 +48,7 @@ import {
   SlidersHorizontal,
   Square,
   Terminal,
+  Users,
   X,
 } from 'lucide-react';
 import { BrowserPanel, FilesPanel } from './Workspace';
@@ -139,6 +140,29 @@ const GOAL_STATUS_LABELS: Record<string, string> = {
   complete: '已完成',
 };
 
+function subagentStatusLabel(status: unknown) {
+  if (typeof status === 'string') {
+    const labels: Record<string, string> = {
+      running: '运行中',
+      active: '运行中',
+      completed: '已完成',
+      waiting: '等待',
+      failed: '失败',
+    };
+    return labels[status.toLowerCase()] || status;
+  }
+  if (status && typeof status === 'object') {
+    const value = status as Record<string, any>;
+    if (value.active) {
+      return value.active.activeFlags?.length ? '等待审批/输入' : '运行中';
+    }
+    if (value.idle !== undefined) return '空闲';
+    if (value.notLoaded !== undefined) return '未加载';
+    if (value.systemError !== undefined) return '错误';
+  }
+  return '未知';
+}
+
 function loadSettings(): RuntimeSettings {
   const saved = readJsonStorage<Partial<RuntimeSettings> | null>(
     'deepseek-codex.settings',
@@ -169,6 +193,8 @@ export default function App() {
   const [model, setModel] = useState('deepseek-flash');
   const [cwd, setCwd] = useState('');
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  const [subagentPanelOpen, setSubagentPanelOpen] = useState(false);
+  const [subagentParentId, setSubagentParentId] = useState<string | null>(null);
   const [threadQuery, setThreadQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [readStates, setReadStates] = useState<Record<string, ThreadReadState>>({});
@@ -1787,6 +1813,7 @@ export default function App() {
     setAttachments([]);
     setOcrAttachments([]);
     mcpSessionAllowedRef.current.clear();
+    setSubagentParentId(null);
     setGoal(null);
     setGoalDialogOpen(false);
     setGoalObjective('');
@@ -1831,7 +1858,8 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [newSession]);
 
-  const resumeThread = useCallback(async (thread: ThreadSummary, record = true) => {
+  const resumeThread = useCallback(async (thread: ThreadSummary, record = true, parentId: string | null = null) => {
+    setSubagentParentId(parentId);
     try {
       setAutomationOpen(false);
       setCapabilitiesOpen(false);
@@ -2909,6 +2937,72 @@ export default function App() {
 
   const currentThread = threads.find((thread) => thread.id === threadId);
 
+  const openSubagent = useCallback(
+    async (agent: ThreadSummary) => {
+      setSubagentPanelOpen(false);
+      await resumeThread(agent, true, agent.parentThreadId || threadRef.current || null);
+    },
+    [resumeThread],
+  );
+
+  const subagents = useMemo<ThreadSummary[]>(() => {
+    const map = new Map<string, ThreadSummary>();
+    for (const item of items) {
+      if (item.type === 'collabAgentToolCall') {
+        const states = item.agentStates || item.agents_states || {};
+        const ids = new Set<string>([
+          ...(item.receiverThreadIds || item.receiver_thread_ids || []),
+          ...Object.keys(states),
+        ]);
+        for (const id of ids) {
+          if (!id) continue;
+          const entry: ThreadSummary =
+            map.get(id) || {
+              id,
+              preview: String(item.prompt || id).slice(0, 100),
+              parentThreadId: threadId,
+            };
+          const state = states[id];
+          const status =
+            typeof state === 'string'
+              ? state
+              : state?.status || state?.type || entry.status;
+          map.set(id, { ...entry, status });
+        }
+      }
+      if (item.type === 'subAgentActivity') {
+        const id = item.agentThreadId || item.agent_thread_id;
+        if (!id) continue;
+        const kind = String(item.kind || '').toLowerCase();
+        const existing: ThreadSummary =
+          map.get(id) || {
+            id,
+            preview: String(item.agentPath || id),
+            parentThreadId: threadId,
+          };
+        map.set(id, {
+          ...existing,
+          preview: String(item.agentPath || existing.preview),
+          agentNickname: item.agentPath
+            ? String(item.agentPath).split('/').filter(Boolean).pop()
+            : existing.agentNickname,
+          model: item.model || existing.model,
+          status:
+            kind === 'completed'
+              ? 'completed'
+              : kind === 'started'
+                ? 'running'
+                : kind === 'interacted'
+                  ? existing.status === 'completed'
+                    ? 'completed'
+                    : 'running'
+                  : existing.status,
+        });
+      }
+    }
+    return [...map.values()];
+  }, [items, threadId]);
+
   const runSlashCommand = useCallback(
     (id: SlashCommandId, argument?: string) => {
       const activeThread =
@@ -2989,6 +3083,9 @@ export default function App() {
               ? `会话 ${threadRef.current.slice(0, 8)} · ${model} · ${mode === 'plan' ? '计划模式' : '执行模式'}${goal ? ` · 目标${GOAL_STATUS_LABELS[goal.status] || goal.status}` : ''}`
               : '尚未开始会话',
           );
+          break;
+        case 'agents':
+          setSubagentPanelOpen(true);
           break;
         default:
           break;
@@ -3409,6 +3506,20 @@ export default function App() {
 
         {null}
 
+        {subagentParentId ? (
+          <div className="subagent-banner">
+            <Users size={13} />
+            <span>正在查看子代理</span>
+            <button
+              onClick={() =>
+                void resumeThread({ id: subagentParentId, preview: '' }, true, null)
+              }
+            >
+              返回主会话
+            </button>
+          </div>
+        ) : null}
+
         {mode === 'plan' ? (
           <div className="plan-banner">
             <ListChecks size={13} />
@@ -3570,6 +3681,7 @@ export default function App() {
           ocrBusy={ocrBusy}
           onKeyDown={onKeyDown}
           onOpenGoal={() => openGoalDialog()}
+          onOpenSubagents={() => setSubagentPanelOpen(true)}
           onSlashCommand={runSlashCommand}
           openCapabilities={openCapabilities}
           openSettings={openSettings}
@@ -3595,6 +3707,7 @@ export default function App() {
           setRailOpen={setRailOpen}
           setSearchOpen={setSearchOpen}
           settings={settings}
+          subagents={subagents}
           textareaRef={textareaRef}
           thumbnails={thumbnails}
           toggleWorktree={toggleWorktree}
@@ -4524,6 +4637,45 @@ export default function App() {
               >
                 保存
               </button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {subagentPanelOpen ? (
+        <Modal onClose={() => setSubagentPanelOpen(false)} labelledBy="subagent-panel-title">
+          <div className="key-card subagent-card">
+            <div className="key-kicker">SUBAGENTS</div>
+            <h2 id="subagent-panel-title">子代理</h2>
+            <p>当前会话派生的子代理；打开会切换到对应线程。</p>
+            <div className="subagent-list">
+              {subagents.length > 0 ? (
+                subagents.map((agent) => (
+                  <button
+                    type="button"
+                    className="subagent-row"
+                    key={agent.id}
+                    onClick={() => void openSubagent(agent)}
+                  >
+                    <span className="subagent-name">
+                      {agent.agentNickname ||
+                        agent.name ||
+                        agent.preview?.slice(0, 60) ||
+                        agent.id.slice(0, 8)}
+                    </span>
+                    <span className="subagent-state">{subagentStatusLabel(agent.status)}</span>
+                    <small>
+                      {agent.agentRole || agent.model || ''}
+                      {agent.updatedAt ? ` · ${timeAgo(agent.updatedAt)}` : ''}
+                    </small>
+                  </button>
+                ))
+              ) : (
+                <div className="cap-empty">当前会话没有子代理</div>
+              )}
+            </div>
+            <div className="key-actions">
+              <button onClick={() => setSubagentPanelOpen(false)}>关闭</button>
             </div>
           </div>
         </Modal>
