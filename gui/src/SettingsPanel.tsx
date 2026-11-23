@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, ArrowLeft, Loader2, Search } from 'lucide-react';
 import type {
   AppConfig,
+  BrowserSiteData,
   ComputerApp,
   LocalToolsPrefs,
   ModelInfo,
@@ -81,6 +82,9 @@ export function SettingsPanel({
     { name: string; url: string; path: string; state: string; size: number; at: number }[]
   >([]);
   const [browserBusy, setBrowserBusy] = useState(false);
+  const [browserSites, setBrowserSites] = useState<BrowserSiteData[]>([]);
+  const [browserSiteBusy, setBrowserSiteBusy] = useState<string | null>(null);
+  const [showAllSites, setShowAllSites] = useState(false);
   const [computerHistory, setComputerHistory] = useState<
     { at: number; tool: string; args: Record<string, unknown>; ok: boolean; error?: string }[]
   >([]);
@@ -126,12 +130,18 @@ export function SettingsPanel({
 
   useEffect(() => {
     if (tab !== 'features') return;
+    let history: { url: string; title: string; at: number }[] = [];
     try {
       const parsed = JSON.parse(readStorage('deepseek-codex.browserHistory') || '[]');
-      setBrowserHistory(Array.isArray(parsed) ? parsed.slice(0, 100) : []);
+      history = Array.isArray(parsed) ? parsed.slice(0, 100) : [];
+      setBrowserHistory(history);
     } catch {
       setBrowserHistory([]);
     }
+    window.codex
+      .browserListSiteData(history.map((entry) => entry.url))
+      .then((list) => setBrowserSites(Array.isArray(list) ? list : []))
+      .catch(() => setBrowserSites([]));
     window.codex
       .getDownloads()
       .then((list) => setDownloads(Array.isArray(list) ? list : []))
@@ -158,6 +168,8 @@ export function SettingsPanel({
           browserOriginPolicy: 'any',
           browserAllowedOrigins: [],
           browserFullCdp: false,
+          browserDownloadPolicy: 'allow',
+          browserFileAccess: false,
         }),
       );
   }, [tab]);
@@ -218,9 +230,19 @@ export function SettingsPanel({
     });
   };
 
+  const refreshBrowserSites = async (history = browserHistory) => {
+    try {
+      const list = await window.codex.browserListSiteData(history.map((entry) => entry.url));
+      setBrowserSites(Array.isArray(list) ? list : []);
+    } catch {
+      setBrowserSites([]);
+    }
+  };
+
   const clearBrowserHistory = () => {
     removeStorage('deepseek-codex.browserHistory');
     setBrowserHistory([]);
+    setBrowserSites((sites) => sites.filter((site) => site.cookieCount > 0));
     setSettingsNotice('浏览记录已清除');
   };
 
@@ -231,11 +253,37 @@ export function SettingsPanel({
       await window.codex.browserClearData(
         kind === 'cache' ? { cache: true } : { cookies: true },
       );
+      if (kind === 'cookies') await refreshBrowserSites();
       setSettingsNotice(kind === 'cache' ? '浏览器缓存已清除' : '浏览器 Cookie 与站点数据已清除');
     } catch (error: any) {
       setSettingsNotice(friendlyClientError(error));
     } finally {
       setBrowserBusy(false);
+    }
+  };
+
+  const clearBrowserSite = async (site: BrowserSiteData) => {
+    if (!window.confirm(`清除 ${site.host} 的 Cookie、缓存与站点存储？`)) return;
+    setBrowserSiteBusy(site.host);
+    try {
+      await window.codex.browserClearSiteData({
+        host: site.host,
+        origins: site.origins,
+      });
+      setBrowserSites((list) =>
+        list
+          .map((entry) =>
+            entry.host === site.host
+              ? { ...entry, cookieCount: 0, hasHistory: false, origins: [] }
+              : entry,
+          )
+          .filter((entry) => entry.cookieCount > 0 || entry.hasHistory),
+      );
+      setSettingsNotice(`已清除 ${site.host} 的站点数据`);
+    } catch (error: any) {
+      setSettingsNotice(friendlyClientError(error));
+    } finally {
+      setBrowserSiteBusy(null);
     }
   };
 
@@ -671,6 +719,52 @@ export function SettingsPanel({
                 清除 Cookie 与站点数据
               </button>
             </div>
+            <div className="setting-label browser-sites-label">按站点数据</div>
+            {browserSites.length > 0 ? (
+              <div className="browser-site-list">
+                {(showAllSites ? browserSites : browserSites.slice(0, 8)).map((site) => (
+                  <div className="browser-site-row" key={site.host}>
+                    <div>
+                      <strong>{site.host}</strong>
+                      <span>
+                        {[
+                          site.cookieCount ? `${site.cookieCount} 个 Cookie` : '',
+                          site.hasHistory ? '有浏览记录' : '',
+                          site.partitions.includes('browser') ? 'Browser' : '',
+                          site.partitions.includes('webTools') ? 'AI 后台' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </span>
+                    </div>
+                    <button
+                      className="settings-button"
+                      disabled={browserSiteBusy === site.host}
+                      onClick={() => void clearBrowserSite(site)}
+                    >
+                      {browserSiteBusy === site.host ? <Loader2 className="spin" size={14} /> : null}
+                      清除
+                    </button>
+                  </div>
+                ))}
+                {browserSites.length > 8 ? (
+                  <button
+                    type="button"
+                    className="browser-history-more"
+                    onClick={() => setShowAllSites((value) => !value)}
+                  >
+                    {showAllSites ? '收起站点' : `查看全部 ${browserSites.length} 个站点`}
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <div className="cap-empty">暂无按站点数据</div>
+            )}
+            <div className="settings-inline-actions">
+              <button onClick={() => void refreshBrowserSites()} disabled={browserBusy}>
+                刷新站点数据
+              </button>
+            </div>
             <div className="setting-label browser-downloads-label">最近下载</div>
             {downloads.length > 0 ? (
               <div className="browser-history-list">
@@ -783,6 +877,47 @@ export function SettingsPanel({
                   disabled={localToolsBusy}
                   onClick={() =>
                     void updateLocalTools({ browserFullCdp: !localTools.browserFullCdp })
+                  }
+                >
+                  <span />
+                </button>
+              </div>
+            ) : null}
+            {localTools?.browser ? (
+              <div className="setting-row">
+                <div className="setting-row-text">
+                  <strong>下载权限</strong>
+                  <span>允许页面保存下载；阻止后下载会被立即取消</span>
+                </div>
+                <select
+                  className="setting-select"
+                  value={localTools.browserDownloadPolicy}
+                  disabled={localToolsBusy}
+                  onChange={(event) =>
+                    void updateLocalTools({
+                      browserDownloadPolicy:
+                        event.target.value === 'deny' ? 'deny' : 'allow',
+                    })
+                  }
+                >
+                  <option value="allow">允许下载</option>
+                  <option value="deny">阻止下载</option>
+                </select>
+              </div>
+            ) : null}
+            {localTools?.browser ? (
+              <div className="setting-row">
+                <div className="setting-row-text">
+                  <strong>文件系统与上传</strong>
+                  <span>允许网站使用文件系统访问 API；传统上传仍由系统文件选择器确认</span>
+                </div>
+                <button
+                  className={`switch ${localTools.browserFileAccess ? 'on' : ''}`}
+                  role="switch"
+                  aria-checked={localTools.browserFileAccess}
+                  disabled={localToolsBusy}
+                  onClick={() =>
+                    void updateLocalTools({ browserFileAccess: !localTools.browserFileAccess })
                   }
                 >
                   <span />

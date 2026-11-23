@@ -7585,6 +7585,54 @@ pre::-webkit-scrollbar-button,
   text-overflow: ellipsis;
 }
 
+.browser-sites-label {
+  margin-top: 14px;
+}
+
+.browser-site-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 8px 0;
+}
+
+.browser-site-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.browser-site-row > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.browser-site-row strong {
+  overflow: hidden;
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.browser-site-row span {
+  color: var(--faint);
+  font-size: 9.5px;
+}
+
+.browser-site-row .settings-button {
+  flex: none;
+}
+
 .settings-inline-actions {
   display: flex;
   flex-wrap: wrap;

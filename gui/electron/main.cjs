@@ -229,7 +229,12 @@ function downloadsFile() {
 
 function setupDownloadTracking() {
   const browserSession = session.fromPartition('persist:shanui-browser');
-  browserSession.on('will-download', (_event, item) => {
+  browserSession.on('will-download', (event, item) => {
+    if (readLocalToolsPrefs().browserDownloadPolicy === 'deny') {
+      event.preventDefault();
+      item.cancel();
+      return;
+    }
     const originalName = item.getFilename() || 'download';
     const downloadsDir = app.getPath('downloads');
     let target = path.join(downloadsDir, originalName);
@@ -343,6 +348,8 @@ function readLocalToolsPrefs() {
     browserOriginPolicy: 'any',
     browserAllowedOrigins: [],
     browserFullCdp: false,
+    browserDownloadPolicy: 'allow',
+    browserFileAccess: false,
   };
   try {
     const saved = JSON.parse(fs.readFileSync(localToolsPrefsFile(), 'utf8'));
@@ -365,6 +372,8 @@ function readLocalToolsPrefs() {
             .map((origin) => origin.trim())
         : [],
       browserFullCdp: Boolean(saved?.browserFullCdp),
+      browserDownloadPolicy: saved?.browserDownloadPolicy === 'deny' ? 'deny' : 'allow',
+      browserFileAccess: Boolean(saved?.browserFileAccess),
     };
   } catch {
     return fallback;
@@ -879,6 +888,10 @@ function browserBridgeFile() {
   return path.join(codexHome, 'shanui-bridge.json');
 }
 
+function browserFileSystemPermissionAllowed(permission) {
+  return permission === 'fileSystem' && readLocalToolsPrefs().browserFileAccess;
+}
+
 function attachBrowserGuest(contents) {
   browserGuest = contents;
   contents.once('destroyed', () => {
@@ -890,8 +903,12 @@ function attachBrowserGuest(contents) {
     }
     return { action: 'deny' };
   });
-  contents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  contents.session.setPermissionCheckHandler(() => false);
+  contents.session.setPermissionRequestHandler((_contents, permission, callback) =>
+    callback(browserFileSystemPermissionAllowed(permission)),
+  );
+  contents.session.setPermissionCheckHandler((_contents, permission) =>
+    browserFileSystemPermissionAllowed(permission),
+  );
   const waiters = browserWaiters;
   browserWaiters = [];
   for (const resolve of waiters) resolve();
@@ -1953,10 +1970,12 @@ function createWindow() {
     contents.on('will-navigate', (event, url) => {
       if (!/^https?:\/\//i.test(url)) event.preventDefault();
     });
-    contents.session.setPermissionRequestHandler((_webContents, _permission, callback) => {
-      callback(false);
+    contents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+      callback(browserFileSystemPermissionAllowed(permission));
     });
-    contents.session.setPermissionCheckHandler(() => false);
+    contents.session.setPermissionCheckHandler((_webContents, permission) =>
+      browserFileSystemPermissionAllowed(permission),
+    );
     attachBrowserGuest(contents);
   });
   win.webContents.on('did-start-loading', () => {
@@ -2286,6 +2305,128 @@ handleIpc('browser:save-page-shot', async (_event, dataUrl) => {
   return file;
 });
 
+function normalizeBrowserOrigin(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = new URL(value.trim());
+    if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password) return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeBrowserHost(value) {
+  const host = String(value || '').trim().toLowerCase().replace(/\.$/, '');
+  if (!host || host.length > 253 || !/^[a-z0-9.-]+$/.test(host)) return null;
+  return host;
+}
+
+async function listBrowserSiteData(historyOrigins) {
+  const sites = new Map();
+  const ensureSite = (host) => {
+    let site = sites.get(host);
+    if (!site) {
+      site = {
+        host,
+        origins: new Set(),
+        cookieCount: 0,
+        partitions: new Set(),
+        hasHistory: false,
+      };
+      sites.set(host, site);
+    }
+    return site;
+  };
+  for (const value of Array.isArray(historyOrigins) ? historyOrigins : []) {
+    const origin = normalizeBrowserOrigin(value);
+    if (!origin) continue;
+    const host = normalizeBrowserHost(new URL(origin).hostname);
+    if (!host) continue;
+    const site = ensureSite(host);
+    site.origins.add(origin);
+    site.hasHistory = true;
+  }
+  for (const partition of ['persist:shanui-browser', 'persist:shanui-web-tools']) {
+    const target = session.fromPartition(partition);
+    let cookies = [];
+    try {
+      cookies = await target.cookies.get({});
+    } catch {
+      cookies = [];
+    }
+    for (const cookie of cookies) {
+      const host = normalizeBrowserHost(String(cookie.domain || '').replace(/^\./, ''));
+      if (!host) continue;
+      const site = ensureSite(host);
+      site.cookieCount += 1;
+      site.partitions.add(partition === 'persist:shanui-browser' ? 'browser' : 'webTools');
+      if (!site.origins.size) site.origins.add(`https://${host}`);
+    }
+  }
+  return [...sites.values()]
+    .map((site) => ({
+      host: site.host,
+      origins: [...site.origins].slice(0, 20),
+      cookieCount: site.cookieCount,
+      hasHistory: site.hasHistory,
+      partitions: [...site.partitions],
+    }))
+    .filter((site) => site.cookieCount > 0 || site.hasHistory)
+    .sort(
+      (left, right) =>
+        Number(right.cookieCount > 0) - Number(left.cookieCount > 0) ||
+        right.cookieCount - left.cookieCount ||
+        left.host.localeCompare(right.host),
+    )
+    .slice(0, 50);
+}
+
+async function clearBrowserSiteData(payload) {
+  const host = normalizeBrowserHost(payload?.host);
+  if (!host) throw new Error('站点 host 无效');
+  const origins = new Set([`http://${host}`, `https://${host}`]);
+  for (const value of Array.isArray(payload?.origins) ? payload.origins : []) {
+    const origin = normalizeBrowserOrigin(value);
+    if (origin && normalizeBrowserHost(new URL(origin).hostname) === host) origins.add(origin);
+  }
+  for (const partition of ['persist:shanui-browser', 'persist:shanui-web-tools']) {
+    const target = session.fromPartition(partition);
+    const cookies = await target.cookies.get({}).catch(() => []);
+    for (const cookie of cookies) {
+      const cookieHost = normalizeBrowserHost(String(cookie.domain || '').replace(/^\./, ''));
+      if (!cookieHost || (cookieHost !== host && !cookieHost.endsWith(`.${host}`))) continue;
+      const scheme = cookie.secure ? 'https' : 'http';
+      const cookiePath = cookie.path || '/';
+      await target.cookies
+        .remove(`${scheme}://${cookieHost}${cookiePath}`, cookie.name)
+        .catch(() => null);
+    }
+    for (const origin of origins) {
+      await target
+        .clearData({
+          origins: [origin],
+          dataTypes: [
+            'cache',
+            'fileSystems',
+            'indexedDB',
+            'localStorage',
+            'serviceWorkers',
+            'webSQL',
+          ],
+        })
+        .catch(() => null);
+    }
+  }
+  return true;
+}
+
+handleIpc('browser:list-site-data', (_event, historyOrigins) =>
+  listBrowserSiteData(historyOrigins),
+);
+
+handleIpc('browser:clear-site-data', (_event, payload) => clearBrowserSiteData(payload));
+
 handleIpc('browser:clear-data', async (_event, payload) => {
   const partitions = ['persist:shanui-browser', 'persist:shanui-web-tools'];
   for (const partition of partitions) {
@@ -2472,6 +2613,8 @@ handleIpc('app:set-local-tools', async (_event, payload) => {
           .map((origin) => origin.trim())
       : [],
     browserFullCdp: Boolean(payload?.browserFullCdp),
+    browserDownloadPolicy: payload?.browserDownloadPolicy === 'deny' ? 'deny' : 'allow',
+    browserFileAccess: Boolean(payload?.browserFileAccess),
   };
   return writeLocalToolsPrefs(prefs);
 });

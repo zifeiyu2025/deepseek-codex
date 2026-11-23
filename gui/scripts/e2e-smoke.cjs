@@ -286,6 +286,33 @@ function getJson(url) {
       computerTools.elementAction,
     JSON.stringify(computerTools),
   );
+  const browserPrivacy = JSON.parse(
+    await evaluate(`(async()=>{
+      const before=await window.codex.localToolsStatus();
+      try {
+        const sites=await window.codex.browserListSiteData(['https://example.com/docs']);
+        const listed=sites.some(site=>site.host==='example.com'&&site.hasHistory);
+        const cleared=await window.codex.browserClearSiteData({
+          host:'example.com',
+          origins:['https://example.com/docs'],
+        });
+        const saved=await window.codex.setLocalTools({
+          ...before,
+          browserDownloadPolicy:'deny',
+          browserFileAccess:true,
+        });
+        const persisted=saved.browserDownloadPolicy==='deny'&&saved.browserFileAccess===true;
+        return JSON.stringify({listed,cleared:cleared===true,persisted});
+      } finally {
+        await window.codex.setLocalTools(before);
+      }
+    })()`),
+  );
+  check(
+    '浏览器站点数据与传输权限',
+    browserPrivacy.listed && browserPrivacy.cleared && browserPrivacy.persisted,
+    JSON.stringify(browserPrivacy),
+  );
   await evaluate("document.querySelector('.settings-back')?.click(); true");
   await sleep(500);
 

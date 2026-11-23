@@ -284,6 +284,16 @@ export type LocalToolsPrefs = {
   browserOriginPolicy: 'any' | 'allowlist';
   browserAllowedOrigins: string[];
   browserFullCdp: boolean;
+  browserDownloadPolicy: 'allow' | 'deny';
+  browserFileAccess: boolean;
+};
+
+export type BrowserSiteData = {
+  host: string;
+  origins: string[];
+  cookieCount: number;
+  hasHistory: boolean;
+  partitions: ('browser' | 'webTools')[];
 };
 
 export type ComputerApp = {
@@ -343,6 +353,8 @@ declare global {
         cache?: boolean;
         cookies?: boolean;
       }): Promise<boolean>;
+      browserListSiteData(historyOrigins: string[]): Promise<BrowserSiteData[]>;
+      browserClearSiteData(payload: { host: string; origins: string[] }): Promise<boolean>;
       browserActivate(webContentsId: number): Promise<boolean>;
       captureScreen(): Promise<string>;
       browserSavePageShot(dataUrl: string): Promise<string>;
