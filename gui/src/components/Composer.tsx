@@ -1,29 +1,46 @@
 import type {
   Dispatch,
   KeyboardEvent as ReactKeyboardEvent,
+  ReactNode,
   RefObject,
   SetStateAction,
 } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  Archive,
   ArrowUp,
   Boxes,
   Check,
   ChevronDown,
   ChevronRight,
   Compass,
+  Cpu,
   FileText,
   FolderOpen,
+  Gauge,
   GitBranch,
+  GitFork,
   Image as ImageIcon,
+  Info,
   ListChecks,
+  Minimize2,
+  Pencil,
   PanelRight,
   Paperclip,
   Plus,
+  Server,
   ShieldCheck,
+  Target,
   X,
 } from 'lucide-react';
-import type { MentionState, ModelInfo, RuntimeSettings } from '../types';
+import type {
+  MentionState,
+  ModelInfo,
+  RuntimeSettings,
+  SlashCommandId,
+  ThreadGoal,
+} from '../types';
 import { effortLabel } from '../lib/format';
 import { writeStorage } from '../lib/storage';
 
@@ -37,6 +54,8 @@ export function Composer({
   autonomyHidden,
   dragging,
   effortOptions,
+  goal,
+  hasThread,
   input,
   insertMention,
   itemsCount,
@@ -47,6 +66,8 @@ export function Composer({
   modelMenuOpen,
   models,
   onKeyDown,
+  onOpenGoal,
+  onSlashCommand,
   openCapabilities,
   openSettings,
   pickFiles,
@@ -84,6 +105,8 @@ export function Composer({
   autonomyHidden: boolean;
   dragging: boolean;
   effortOptions: string[];
+  goal: ThreadGoal | null;
+  hasThread: boolean;
   input: string;
   insertMention: (item: { path: string; fileName?: string }) => void;
   itemsCount: number;
@@ -94,6 +117,8 @@ export function Composer({
   modelMenuOpen: boolean;
   models: ModelInfo[];
   onKeyDown: (event: ReactKeyboardEvent<HTMLTextAreaElement>) => void;
+  onOpenGoal: () => void;
+  onSlashCommand: (id: SlashCommandId, argument?: string) => void;
   openCapabilities: () => void;
   openSettings: () => void;
   pickFiles: () => void;
@@ -122,6 +147,208 @@ export function Composer({
   toggleWorktree: () => void;
   worktreeMode: boolean;
 }) {
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const goalStatusLabels: Record<string, string> = {
+    active: '进行中',
+    paused: '已暂停',
+    blocked: '受阻',
+    usageLimited: '用量受限',
+    budgetLimited: '预算受限',
+    complete: '已完成',
+  };
+  const slashCommands = useMemo<
+    {
+      id: SlashCommandId;
+      name: string;
+      title: string;
+      description: string;
+      icon: ReactNode;
+      enabled: boolean;
+    }[]
+  >(
+    () => [
+      {
+        id: 'plan',
+        name: 'plan',
+        title: mode === 'plan' ? '关闭计划模式' : '计划模式',
+        description: '先梳理方案与待办，确认后再修改',
+        icon: <ListChecks size={13} />,
+        enabled: true,
+      },
+      {
+        id: 'goal',
+        name: 'goal',
+        title: goal ? '查看目标' : '设置目标',
+        description: '让 Codex 持续朝目标推进，空闲时继续',
+        icon: <Target size={13} />,
+        enabled: true,
+      },
+      {
+        id: 'new',
+        name: 'new',
+        title: '新建会话',
+        description: '在同一工作区开始空白会话',
+        icon: <Plus size={13} />,
+        enabled: true,
+      },
+      {
+        id: 'model',
+        name: 'model',
+        title: '模型',
+        description: '切换模型',
+        icon: <Cpu size={13} />,
+        enabled: true,
+      },
+      {
+        id: 'reasoning',
+        name: 'reasoning',
+        title: '推理强度',
+        description: '调整思考强度',
+        icon: <Gauge size={13} />,
+        enabled: true,
+      },
+      {
+        id: 'compact',
+        name: 'compact',
+        title: '压缩上下文',
+        description: running ? '任务运行中不可压缩' : '压缩当前会话上下文',
+        icon: <Minimize2 size={13} />,
+        enabled: hasThread && !running,
+      },
+      {
+        id: 'worktree',
+        name: 'worktree',
+        title: worktreeMode ? '关闭 Worktree' : '启用 Worktree',
+        description: '在独立工作区中运行任务',
+        icon: <GitBranch size={13} />,
+        enabled: true,
+      },
+      {
+        id: 'fork',
+        name: 'fork',
+        title: '分支会话',
+        description: '从当前会话创建分支',
+        icon: <GitFork size={13} />,
+        enabled: hasThread,
+      },
+      {
+        id: 'archive',
+        name: 'archive',
+        title: '归档会话',
+        description: '归档当前会话',
+        icon: <Archive size={13} />,
+        enabled: hasThread,
+      },
+      {
+        id: 'rename',
+        name: 'rename',
+        title: '重命名会话',
+        description: '修改当前会话标题',
+        icon: <Pencil size={13} />,
+        enabled: hasThread,
+      },
+      {
+        id: 'mcp',
+        name: 'mcp',
+        title: 'MCP 状态',
+        description: '打开能力面板查看 MCP 服务器',
+        icon: <Server size={13} />,
+        enabled: true,
+      },
+      {
+        id: 'init',
+        name: 'init',
+        title: '初始化 AGENTS.md',
+        description: running ? '任务运行中不可初始化' : '检查项目并创建 AGENTS.md',
+        icon: <FileText size={13} />,
+        enabled: !running,
+      },
+      {
+        id: 'status',
+        name: 'status',
+        title: '会话状态',
+        description: '查看会话、模型与目标状态',
+        icon: <Info size={13} />,
+        enabled: true,
+      },
+    ],
+    [goal, hasThread, mode, running, worktreeMode],
+  );
+  const slashQuery =
+    !mention && /^\/[^\s]*$/.test(input) ? input.slice(1).toLowerCase() : null;
+  const filteredSlashCommands = useMemo(() => {
+    if (slashQuery === null) return [];
+    return slashCommands.filter(
+      (command) =>
+        command.name.startsWith(slashQuery) ||
+        command.title.toLowerCase().includes(slashQuery),
+    );
+  }, [slashCommands, slashQuery]);
+  const slashOpen =
+    slashQuery !== null && !slashDismissed && filteredSlashCommands.length > 0;
+  const activeSlashIndex = Math.min(
+    slashIndex,
+    Math.max(0, filteredSlashCommands.length - 1),
+  );
+
+  useEffect(() => {
+    setSlashIndex(0);
+    setSlashDismissed(false);
+  }, [slashQuery]);
+
+  const executeSlashCommand = (
+    command: (typeof slashCommands)[number],
+    argument?: string,
+  ) => {
+    if (!command.enabled) return;
+    setInput('');
+    setSlashDismissed(false);
+    setAttachMenuOpen(false);
+    setModelMenuOpen(false);
+    onSlashCommand(command.id, argument);
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (slashOpen) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setSlashIndex((previous) => (previous + 1) % filteredSlashCommands.length);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setSlashIndex(
+          (previous) =>
+            (previous - 1 + filteredSlashCommands.length) % filteredSlashCommands.length,
+        );
+        return;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        executeSlashCommand(filteredSlashCommands[activeSlashIndex]);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setSlashDismissed(true);
+        return;
+      }
+    }
+    if (!mention && event.key === 'Enter' && !event.shiftKey) {
+      const match = /^\/([a-z-]+)(?:\s+([\s\S]*))?$/i.exec(input);
+      const command = match
+        ? slashCommands.find((entry) => entry.name === match[1].toLowerCase())
+        : undefined;
+      if (command) {
+        event.preventDefault();
+        executeSlashCommand(command, match?.[2]?.trim());
+        return;
+      }
+    }
+    onKeyDown(event);
+  };
+
   return (
         <footer className="composer">
           {!autonomyHidden &&
@@ -217,6 +444,51 @@ export function Composer({
                 )}
               </div>
             ) : null}
+            {slashOpen ? (
+              <div className="slash-menu" role="listbox" aria-label="输入框命令">
+                <div className="slash-menu-title">命令</div>
+                {filteredSlashCommands.map((command, index) => (
+                  <button
+                    key={command.id}
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeSlashIndex}
+                    className={`slash-item ${index === activeSlashIndex ? 'active' : ''} ${command.enabled ? '' : 'disabled'}`}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      executeSlashCommand(command);
+                    }}
+                  >
+                    <span className="slash-icon">{command.icon}</span>
+                    <span className="slash-text">
+                      <strong>{command.title}</strong>
+                      <small>{command.description}</small>
+                    </span>
+                    <code>/{command.name}</code>
+                  </button>
+                ))}
+                <div className="slash-hint">↑↓ 选择 · Enter 执行 · Esc 关闭</div>
+              </div>
+            ) : null}
+            {goal ? (
+              <button
+                type="button"
+                className="composer-goal"
+                onClick={onOpenGoal}
+                title={goal.objective}
+              >
+                <Target size={13} />
+                <span className={`goal-status ${goal.status}`}>
+                  {goalStatusLabels[goal.status] || goal.status}
+                </span>
+                <span className="goal-objective">{goal.objective}</span>
+                {goal.tokenBudget ? (
+                  <span className="goal-usage">
+                    {goal.tokensUsed}/{goal.tokenBudget}
+                  </span>
+                ) : null}
+              </button>
+            ) : null}
             {attachments.length > 0 ? (
               <div className="attachment-row">
                 {attachments.map((path) => (
@@ -244,9 +516,11 @@ export function Composer({
               onChange={(event) => {
                 const value = event.target.value;
                 setInput(value);
+                setSlashDismissed(false);
                 refreshMention(value, event.target.selectionStart ?? value.length);
               }}
-              onKeyDown={onKeyDown}
+              onKeyDown={handleKeyDown}
+              onBlur={() => setSlashDismissed(true)}
               onPaste={(event) => {
                 const hasImage = Array.from(event.clipboardData.items).some((item) =>
                   item.type.startsWith('image/'),
@@ -338,6 +612,15 @@ export function Composer({
                       >
                         <ListChecks size={13} /> 计划模式
                         {mode === 'plan' ? <Check size={12} /> : null}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setAttachMenuOpen(false);
+                          onOpenGoal();
+                        }}
+                      >
+                        <Target size={13} /> 目标
+                        {goal ? <Check size={12} /> : null}
                       </button>
                       <button
                         onClick={() => {

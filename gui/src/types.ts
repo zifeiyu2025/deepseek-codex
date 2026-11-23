@@ -119,6 +119,40 @@ export type MentionState = {
   results: { path: string; fileName: string }[];
 };
 
+export type ThreadGoalStatus =
+  | 'active'
+  | 'paused'
+  | 'blocked'
+  | 'usageLimited'
+  | 'budgetLimited'
+  | 'complete';
+
+export type ThreadGoal = {
+  threadId: string;
+  objective: string;
+  status: ThreadGoalStatus;
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type SlashCommandId =
+  | 'plan'
+  | 'goal'
+  | 'new'
+  | 'model'
+  | 'reasoning'
+  | 'compact'
+  | 'worktree'
+  | 'fork'
+  | 'archive'
+  | 'rename'
+  | 'mcp'
+  | 'init'
+  | 'status';
+
 export type UserInputOption = {
   label: string;
   description?: string;

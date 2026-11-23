@@ -112,6 +112,8 @@ import type {
   ReviewTarget,
   RuntimeSettings,
   SettingsTab,
+  SlashCommandId,
+  ThreadGoal,
   ThreadSearchResult,
   ThreadSummary,
   ThreadReadState,
@@ -124,6 +126,15 @@ const DEFAULT_SETTINGS: RuntimeSettings = {
   approvalPolicy: 'on-request',
   sandbox: 'danger-full-access',
   effort: 'high',
+};
+
+const GOAL_STATUS_LABELS: Record<string, string> = {
+  active: '进行中',
+  paused: '已暂停',
+  blocked: '受阻',
+  usageLimited: '用量受限',
+  budgetLimited: '预算受限',
+  complete: '已完成',
 };
 
 function loadSettings(): RuntimeSettings {
@@ -303,6 +314,10 @@ export default function App() {
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [dragging, setDragging] = useState(false);
   const [mention, setMention] = useState<MentionState | null>(null);
+  const [goal, setGoal] = useState<ThreadGoal | null>(null);
+  const [goalDialogOpen, setGoalDialogOpen] = useState(false);
+  const [goalObjective, setGoalObjective] = useState('');
+  const [goalBusy, setGoalBusy] = useState(false);
   const [usage, setUsage] = useState<{
     total: number;
     context: number | null;
@@ -355,6 +370,7 @@ export default function App() {
   const automationRunsRef = useRef(new Map<string, string>());
   const automationWatchdogsRef = useRef(new Map<string, number>());
   const mentionSeqRef = useRef(0);
+  const goalRequestRef = useRef(0);
   const worktreeRef = useRef<WorktreeInfo | null>(null);
   const pendingUserRef = useRef<string | null>(null);
   const gitRequestRef = useRef(0);
@@ -1336,6 +1352,16 @@ export default function App() {
           refreshSections();
           refreshThreads();
           break;
+        case 'thread/goal/updated':
+          if (!params.threadId || params.threadId === threadRef.current) {
+            setGoal(params.goal ?? null);
+          }
+          break;
+        case 'thread/goal/cleared':
+          if (!params.threadId || params.threadId === threadRef.current) {
+            setGoal(null);
+          }
+          break;
         case 'thread/archived':
         case 'thread/unarchived':
           refreshThreads();
@@ -1554,6 +1580,115 @@ export default function App() {
     }
   }, []);
 
+  const togglePlanMode = useCallback(() => {
+    setMode((previous) => {
+      const next = previous === 'plan' ? 'default' : 'plan';
+      modeRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const refreshGoal = useCallback(async (id: string | null) => {
+    const seq = ++goalRequestRef.current;
+    if (!id) {
+      setGoal(null);
+      return;
+    }
+    try {
+      const result = await window.codex.request('thread/goal/get', { threadId: id });
+      if (seq === goalRequestRef.current) setGoal(result?.goal ?? null);
+    } catch {
+      if (seq === goalRequestRef.current) setGoal(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshGoal(threadId);
+  }, [threadId, refreshGoal]);
+
+  const openGoalDialog = useCallback(
+    (objective?: string) => {
+      setGoalObjective(objective?.trim() || goal?.objective || '');
+      setGoalDialogOpen(true);
+    },
+    [goal],
+  );
+
+  const saveGoal = useCallback(async () => {
+    const objective = goalObjective.trim();
+    if (!objective) return;
+    setGoalBusy(true);
+    setError(null);
+    try {
+      let id = threadRef.current;
+      if (!id) {
+        const created = await window.codex.request('thread/start', {
+          cwd: worktreeRef.current?.path || cwdRef.current,
+          model: modelRef.current,
+          modelProvider: config?.defaultProvider || 'deepseek',
+          approvalPolicy: settingsRef.current.approvalPolicy,
+          sandbox: settingsRef.current.sandbox,
+          projectId: projectIdRef.current || undefined,
+        });
+        id = created?.thread?.id;
+        if (!id) throw new Error('创建会话失败');
+        setThreadId(id);
+        threadRef.current = id;
+        refreshThreads();
+      }
+      const result = await window.codex.request('thread/goal/set', {
+        threadId: id,
+        objective,
+        status: 'active',
+        origin: 'user',
+      });
+      goalRequestRef.current += 1;
+      setGoal(result?.goal ?? null);
+      setGoalDialogOpen(false);
+      setNotice('目标已设置，Codex 会在空闲时继续推进');
+    } catch (goalError: any) {
+      setError(friendlyClientError(goalError));
+    } finally {
+      setGoalBusy(false);
+    }
+  }, [config, goalObjective, refreshThreads]);
+
+  const toggleGoalStatus = useCallback(async () => {
+    const id = threadRef.current;
+    if (!id || !goal) return;
+    setGoalBusy(true);
+    try {
+      const result = await window.codex.request('thread/goal/set', {
+        threadId: id,
+        status: goal.status === 'paused' ? 'active' : 'paused',
+        origin: 'user',
+      });
+      goalRequestRef.current += 1;
+      setGoal(result?.goal ?? null);
+    } catch (goalError: any) {
+      setError(friendlyClientError(goalError));
+    } finally {
+      setGoalBusy(false);
+    }
+  }, [goal]);
+
+  const clearGoal = useCallback(async () => {
+    const id = threadRef.current;
+    if (!id || !goal) return;
+    setGoalBusy(true);
+    try {
+      await window.codex.request('thread/goal/clear', { threadId: id, origin: 'user' });
+      goalRequestRef.current += 1;
+      setGoal(null);
+      setGoalDialogOpen(false);
+      setNotice('目标已清除');
+    } catch (goalError: any) {
+      setError(friendlyClientError(goalError));
+    } finally {
+      setGoalBusy(false);
+    }
+  }, [goal]);
+
   const newSession = useCallback(() => {
     setAutomationOpen(false);
     setCapabilitiesOpen(false);
@@ -1572,6 +1707,9 @@ export default function App() {
     setWorktree(null);
     worktreeRef.current = null;
     setAttachments([]);
+    setGoal(null);
+    setGoalDialogOpen(false);
+    setGoalObjective('');
     setUsage({ total: 0, context: null, lastInput: 0, lastOutput: 0, input: 0, cached: 0 });
     setLiveDiff('');
   }, []);
@@ -2631,6 +2769,89 @@ export default function App() {
 
   const currentThread = threads.find((thread) => thread.id === threadId);
 
+  const runSlashCommand = useCallback(
+    (id: SlashCommandId, argument?: string) => {
+      const activeThread =
+        threads.find((thread) => thread.id === threadRef.current) ||
+        (threadRef.current
+          ? ({ id: threadRef.current, preview: '' } as ThreadSummary)
+          : null);
+      switch (id) {
+        case 'plan':
+          togglePlanMode();
+          break;
+        case 'goal':
+          openGoalDialog(argument);
+          break;
+        case 'new':
+          newSession();
+          break;
+        case 'model':
+        case 'reasoning':
+          setModelMenuOpen(true);
+          break;
+        case 'compact':
+          void compactThread();
+          break;
+        case 'worktree':
+          toggleWorktree();
+          break;
+        case 'mcp':
+          void openCapabilities();
+          break;
+        case 'fork':
+          if (activeThread) void forkThread(activeThread);
+          else setError('当前会话尚未就绪，暂时不能分支');
+          break;
+        case 'archive':
+          if (activeThread) void archiveThread(activeThread);
+          else setError('当前会话尚未就绪，暂时不能归档');
+          break;
+        case 'rename':
+          if (activeThread) {
+            setRenameTarget(activeThread);
+            setRenameInput(activeThread.name || activeThread.preview || '');
+          } else {
+            setError('当前会话尚未就绪，暂时不能重命名');
+          }
+          break;
+        case 'init':
+          if (modeRef.current === 'plan') {
+            modeRef.current = 'default';
+            setMode('default');
+          }
+          void send(
+            '请先检查仓库结构、已有说明和构建方式，然后在仓库根目录创建或更新 AGENTS.md，写明构建、测试、代码风格、目录结构与注意事项；除非必要，不要修改其他文件。',
+          );
+          break;
+        case 'status':
+          setNotice(
+            threadRef.current
+              ? `会话 ${threadRef.current.slice(0, 8)} · ${model} · ${mode === 'plan' ? '计划模式' : '执行模式'}${goal ? ` · 目标${GOAL_STATUS_LABELS[goal.status] || goal.status}` : ''}`
+              : '尚未开始会话',
+          );
+          break;
+        default:
+          break;
+      }
+    },
+    [
+      archiveThread,
+      compactThread,
+      forkThread,
+      goal,
+      mode,
+      model,
+      newSession,
+      openCapabilities,
+      openGoalDialog,
+      send,
+      threads,
+      togglePlanMode,
+      toggleWorktree,
+    ],
+  );
+
   const canApprovePlan = mode === 'plan' && !running && Boolean(planMarkdown) && Boolean(threadId);
 
   const approvePlan = useCallback(async () => {
@@ -3169,6 +3390,8 @@ export default function App() {
           attachMenuOpen={attachMenuOpen}
           attachments={attachments}
           autonomyHidden={autonomyHidden}
+          goal={goal}
+          hasThread={Boolean(threadId)}
           dragging={dragging}
           effortOptions={effortOptions}
           input={input}
@@ -3181,6 +3404,8 @@ export default function App() {
           modelMenuOpen={modelMenuOpen}
           models={models}
           onKeyDown={onKeyDown}
+          onOpenGoal={() => openGoalDialog()}
+          onSlashCommand={runSlashCommand}
           openCapabilities={openCapabilities}
           openSettings={openSettings}
           pickFiles={pickFiles}
@@ -4127,6 +4352,50 @@ export default function App() {
                 onClick={saveProjectRename}
               >
                 保存
+              </button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {goalDialogOpen ? (
+        <Modal onClose={() => setGoalDialogOpen(false)} labelledBy="goal-dialog-title">
+          <div className="key-card">
+            <div className="key-kicker">GOAL</div>
+            <h2 id="goal-dialog-title">{goal ? '持续目标' : '设置目标'}</h2>
+            <p>Codex 会在会话空闲时继续朝这个目标推进；随时可以暂停或清除。</p>
+            <textarea
+              className="goal-textarea"
+              value={goalObjective}
+              onChange={(event) => setGoalObjective(event.target.value)}
+              placeholder="描述目标与可衡量的完成条件"
+              rows={5}
+            />
+            {goal ? (
+              <div className="goal-meta">
+                <span>{GOAL_STATUS_LABELS[goal.status] || goal.status}</span>
+                <span>已用 {formatTokens(goal.tokensUsed)} tokens</span>
+                {goal.tokenBudget ? <span>预算 {formatTokens(goal.tokenBudget)}</span> : null}
+              </div>
+            ) : null}
+            <div className="key-actions">
+              {goal ? (
+                <button onClick={() => void toggleGoalStatus()} disabled={goalBusy}>
+                  {goal.status === 'paused' ? '继续' : '暂停'}
+                </button>
+              ) : null}
+              {goal ? (
+                <button onClick={() => void clearGoal()} disabled={goalBusy}>
+                  清除目标
+                </button>
+              ) : null}
+              <button onClick={() => setGoalDialogOpen(false)}>取消</button>
+              <button
+                className="primary"
+                disabled={!goalObjective.trim() || goalBusy}
+                onClick={() => void saveGoal()}
+              >
+                {goalBusy ? '保存中…' : '保存目标'}
               </button>
             </div>
           </div>

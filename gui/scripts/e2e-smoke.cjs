@@ -345,6 +345,49 @@ function getJson(url) {
     await evaluate("document.querySelector('.thread-heading span')?.textContent.includes('最近')"),
   );
 
+  const setComposer = (value) =>
+    evaluate(`(()=>{const ta=document.querySelector('.composer textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(ta, ${JSON.stringify(value)}); ta.dispatchEvent(new Event('input',{bubbles:true})); ta.focus(); return true;})()`);
+  const pressComposer = (key) =>
+    evaluate(`(()=>{const ta=document.querySelector('.composer textarea'); ta.dispatchEvent(new KeyboardEvent('keydown',{key:${JSON.stringify(key)},bubbles:true,cancelable:true})); return true;})()`);
+
+  await setComposer('/');
+  await sleep(200);
+  const slashMenu = JSON.parse(
+    await evaluate(
+      "JSON.stringify({count:document.querySelectorAll('.slash-item').length,titles:[...document.querySelectorAll('.slash-item strong')].map(e=>e.textContent),active:document.querySelector('.slash-item.active code')?.textContent})",
+    ),
+  );
+  check(
+    '输入框斜杠命令面板',
+    slashMenu.count >= 10 &&
+      slashMenu.titles.includes('计划模式') &&
+      slashMenu.titles.includes('设置目标'),
+    JSON.stringify(slashMenu),
+  );
+  await pressComposer('ArrowDown');
+  check('斜杠命令键盘选择', (await evaluate("document.querySelector('.slash-item.active code')?.textContent")) === '/goal');
+  await pressComposer('Escape');
+  await sleep(120);
+  check('斜杠命令 Esc 关闭', await evaluate("document.querySelectorAll('.slash-menu').length === 0"));
+
+  await setComposer('/plan');
+  await pressComposer('Enter');
+  await sleep(200);
+  check('斜杠命令执行计划模式', await evaluate("Boolean(document.querySelector('.plan-banner'))"));
+  await setComposer('/plan');
+  await pressComposer('Enter');
+  await sleep(200);
+  check('斜杠命令退出计划模式', await evaluate("!document.querySelector('.plan-banner')"));
+
+  await setComposer('/goal');
+  await pressComposer('Enter');
+  await sleep(200);
+  check('斜杠命令打开目标弹窗', await evaluate("Boolean(document.querySelector('#goal-dialog-title'))"));
+  await evaluate(
+    "[...document.querySelectorAll('.key-card .key-actions button')].find(b=>b.textContent.trim()==='取消')?.click(); true",
+  );
+  await sleep(150);
+
   socket.close();
   if (failures.length > 0) {
     console.error(`\nSMOKE_FAILED ${failures.length} 项`);
