@@ -201,21 +201,126 @@ function localMcpScriptPath() {
 }
 
 function readLocalToolsPrefs() {
-  const fallback = { browser: false, computer: false, search: false };
+  const fallback = { browser: false, computer: false, search: false, ocr: false, searchProvider: 'auto' };
   try {
     const saved = JSON.parse(fs.readFileSync(localToolsPrefsFile(), 'utf8'));
+    const provider = ['auto', 'deepseek', 'local'].includes(saved?.searchProvider)
+      ? saved.searchProvider
+      : 'auto';
     return {
       browser: Boolean(saved?.browser),
       computer: Boolean(saved?.computer),
       search: Boolean(saved?.search),
+      ocr: Boolean(saved?.ocr),
+      searchProvider: provider,
     };
   } catch {
     return fallback;
   }
 }
 
+function deepseekApiKey() {
+  return apiKey || process.env.DEEPSEEK_API_KEY || '';
+}
+
+function deepseekBaseUrl() {
+  if (process.env.DEEPSEEK_BASE_URL) return process.env.DEEPSEEK_BASE_URL.replace(/\/+$/, '');
+  try {
+    const raw = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
+    const providerMatch = /^\s*model_provider\s*=\s*"([^"]+)"/m.exec(raw);
+    const provider = providerMatch?.[1] || 'deepseek';
+    const section = new RegExp(
+      `\\[model_providers\\.${provider.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]([\\s\\S]*?)(?=^\\s*\\[|$)`,
+      'm',
+    ).exec(raw);
+    const base = section && /^\s*base_url\s*=\s*"([^"]+)"/m.exec(section[1]);
+    if (base) return base[1].replace(/\/+$/, '');
+  } catch {
+    /* fall through */
+  }
+  return 'https://api.deepseek.com';
+}
+
+async function deepseekApi(pathname, options = {}) {
+  const key = deepseekApiKey();
+  if (!key) throw new Error('尚未配置 DeepSeek API Key');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs || 30000);
+  try {
+    const response = await fetch(`${deepseekBaseUrl()}${pathname}`, {
+      method: options.method || 'GET',
+      headers: {
+        ...(options.body instanceof FormData ? {} : { 'content-type': 'application/json' }),
+        authorization: `Bearer ${key}`,
+        ...(options.headers || {}),
+      },
+      body:
+        options.body instanceof FormData
+          ? options.body
+          : options.body === undefined
+            ? undefined
+            : JSON.stringify(options.body),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    let data = null;
+    try {
+      data = text.trim() ? JSON.parse(text.trim()) : null;
+    } catch {
+      data = null;
+    }
+    if (!response.ok || data?.error) {
+      const message = data?.error?.message || `DeepSeek 接口返回 ${response.status}`;
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('DeepSeek 接口请求超时');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function deepseekSearch(query, count, oriQuestion) {
+  const data = await deepseekApi('/v1/tools/search', {
+    method: 'POST',
+    body: {
+      query,
+      count: Math.max(1, Math.min(50, Number(count) || 10)),
+      need_content: false,
+      ...(oriQuestion ? { ori_question: oriQuestion } : {}),
+    },
+    timeoutMs: 30000,
+  });
+  return (data?.results || []).map((result) => ({
+    title: result.title || result.site_name || result.url || '',
+    url: result.url || '',
+    snippet: result.snippet || (result.summary || '').slice(0, 200),
+    summary: result.summary || '',
+    site: result.site_name || '',
+    date: result.date || null,
+    authority: result.authority ?? -1,
+    score: result.rerank_score ?? 0,
+  }));
+}
+
+async function deepseekFetchPage(url) {
+  const data = await deepseekApi('/v1/tools/fetch', {
+    method: 'POST',
+    body: { url },
+    timeoutMs: 30000,
+  });
+  return {
+    title: data?.title || '',
+    content: data?.content || '',
+  };
+}
+
 function localMcpServerConfig(prefs) {
-  if (!prefs.browser && !prefs.computer && !prefs.search) return null;
+  if (!prefs.browser && !prefs.computer && !prefs.search && !prefs.ocr) return null;
   return {
     command: process.execPath,
     args: [localMcpScriptPath()],
@@ -225,18 +330,29 @@ function localMcpServerConfig(prefs) {
       SHANUI_ENABLE_BROWSER: prefs.browser ? '1' : '0',
       SHANUI_ENABLE_COMPUTER: prefs.computer ? '1' : '0',
       SHANUI_ENABLE_WEB_SEARCH: prefs.search ? '1' : '0',
+      SHANUI_ENABLE_OCR: prefs.ocr ? '1' : '0',
     },
     default_tools_approval_mode: 'prompt',
-    tool_timeout_sec: 60,
+    tool_timeout_sec: 120,
   };
 }
 
 function withLocalMcpConfig(method, params) {
   if (!THREAD_CONFIG_METHODS.has(method)) return params;
-  const server = localMcpServerConfig(readLocalToolsPrefs());
-  if (!server) return params;
+  const prefs = readLocalToolsPrefs();
+  const server = localMcpServerConfig(prefs);
   const config = { ...(params?.config || {}) };
-  config['mcp_servers.shanui_local'] = server;
+  let changed = false;
+  if (server) {
+    config['mcp_servers.shanui_local'] = server;
+    changed = true;
+  }
+  if (prefs.search && hasApiKey()) {
+    config['features.standalone_web_search'] = true;
+    config['model_providers.deepseek.supports_standalone_web_search'] = true;
+    changed = true;
+  }
+  if (!changed) return params;
   return { ...(params || {}), config };
 }
 
@@ -763,43 +879,142 @@ function runWebWorker(url, script, settleMs) {
   return next.finally(() => scheduleWebWorkerDispose());
 }
 
+async function localWebSearch(query, limit) {
+  const searchUrl = `https://cn.bing.com/search?setlang=zh-Hans&q=${encodeURIComponent(query)}`;
+  const data = await runWebWorker(
+    searchUrl,
+    `(() => {
+      const limit = ${limit};
+      const blocks = [...document.querySelectorAll('li.b_algo, div.result, div.c-container, div.vrwrap')];
+      const results = [];
+      const seen = new Set();
+      for (const block of blocks) {
+        if (results.length >= limit) break;
+        const link = block.querySelector('h2 a, h3 a');
+        if (!link) continue;
+        const href = link.href || '';
+        if (!/^https?:/i.test(href) || seen.has(href)) continue;
+        const title = ((link.innerText || link.textContent || '') + '').replace(/\\s+/g, ' ').trim();
+        if (!title) continue;
+        const snippetEl = block.querySelector('.b_caption p, .b_lineclamp1, .b_lineclamp2, .b_lineclamp3, .c-abstract, .str_info, .str-text, [class*="summary"], [class*="desc"]');
+        const snippet = (snippetEl ? snippetEl.innerText || '' : (block.innerText || '').replace(title, ''))
+          .replace(/\\s+/g, ' ')
+          .trim()
+          .slice(0, 300);
+        seen.add(href);
+        results.push({ title: title.slice(0, 200), url: href, snippet });
+      }
+      return { title: document.title, url: location.href, results };
+    })()`,
+    400,
+  );
+  if (!data?.results?.length) throw new Error('未找到搜索结果');
+  return data.results;
+}
+
+async function localWebFetch(url, maxChars) {
+  const data = await runWebWorker(
+    url,
+    `(() => {
+      const maxChars = ${maxChars};
+      const candidates = [...document.querySelectorAll('article, main, [role="main"]')];
+      candidates.push(document.body);
+      const root = candidates
+        .filter(Boolean)
+        .sort((a, b) => ((b.innerText || '').length - (a.innerText || '').length))[0];
+      if (!root) return { title: document.title, url: location.href, description: '', content: '' };
+      const clone = root.cloneNode(true);
+      clone.querySelectorAll('script, style, noscript, svg, canvas, iframe, header, nav, footer, aside, form, button').forEach((el) => el.remove());
+      const content = (clone.innerText || clone.textContent || '')
+        .replace(/\\r/g, '')
+        .replace(/[ \\t]+/g, ' ')
+        .replace(/\\n{3,}/g, '\\n\\n')
+        .trim()
+        .slice(0, maxChars);
+      const description = document.querySelector('meta[name="description"]')?.content || '';
+      return {
+        title: document.title,
+        url: location.href,
+        description: (description + '').replace(/\\s+/g, ' ').trim().slice(0, 300),
+        content,
+      };
+    })()`,
+    500,
+  );
+  if (!data?.content) throw new Error('页面没有可读取的正文');
+  return data;
+}
+
+async function ocrFile(filePath, purpose) {
+  if (!readLocalToolsPrefs().ocr) throw new Error('文档识别（OCR）未启用');
+  const target = await realpathNearest(path.resolve(filePath));
+  assertPathAllowed(target, '文件不在允许范围');
+  const stat = await fs.promises.stat(target);
+  if (!stat.isFile()) throw new Error('只能识别文件');
+  if (stat.size > 100 * 1024 * 1024) throw new Error('OCR 文件不能超过 100 MiB');
+  const mode =
+    purpose === 'rich_layout_recognition' ? 'rich_layout_recognition' : 'text_recognition';
+  const buffer = await fs.promises.readFile(target);
+  const form = new FormData();
+  form.append('purpose', mode);
+  form.append('file', new Blob([buffer]), path.basename(target));
+  const data = await deepseekApi('/v1/tools/ocr', {
+    method: 'POST',
+    body: form,
+    timeoutMs: 180000,
+  });
+  const pages = (data?.pages || []).map((page) => ({
+    index: page.index,
+    finishReason: page.finish_reason || '',
+    text: String(page.text || ''),
+  }));
+  const fullText = pages
+    .map((page) => `--- 第 ${Number(page.index) + 1} 页 ---\n${page.text}`)
+    .join('\n\n');
+  const maxChars = 120000;
+  return {
+    name: path.basename(target),
+    path: target,
+    purpose: data?.purpose || mode,
+    pageCount: data?.page_count ?? pages.length,
+    usage: data?.usage || null,
+    text: fullText.slice(0, maxChars),
+    truncated: fullText.length > maxChars,
+  };
+}
+
 async function handleBrowserTool(tool, args) {
   if (tool === 'web_search') {
     const query = typeof args?.query === 'string' ? args.query.trim() : '';
     if (!query) throw new Error('缺少搜索关键词');
     const limit = Math.max(1, Math.min(10, Number(args?.count) || 6));
-    const searchUrl = `https://cn.bing.com/search?setlang=zh-Hans&q=${encodeURIComponent(query)}`;
-    const data = await runWebWorker(
-      searchUrl,
-      `(() => {
-        const limit = ${limit};
-        const blocks = [...document.querySelectorAll('li.b_algo, div.result, div.c-container, div.vrwrap')];
-        const results = [];
-        const seen = new Set();
-        for (const block of blocks) {
-          if (results.length >= limit) break;
-          const link = block.querySelector('h2 a, h3 a');
-          if (!link) continue;
-          const href = link.href || '';
-          if (!/^https?:/i.test(href) || seen.has(href)) continue;
-          const title = ((link.innerText || link.textContent || '') + '').replace(/\\s+/g, ' ').trim();
-          if (!title) continue;
-          const snippetEl = block.querySelector('.b_caption p, .b_lineclamp1, .b_lineclamp2, .b_lineclamp3, .c-abstract, .str_info, .str-text, [class*="summary"], [class*="desc"]');
-          const snippet = (snippetEl ? snippetEl.innerText || '' : (block.innerText || '').replace(title, ''))
-            .replace(/\\s+/g, ' ')
-            .trim()
-            .slice(0, 300);
-          seen.add(href);
-          results.push({ title: title.slice(0, 200), url: href, snippet });
+    const prefs = readLocalToolsPrefs();
+    let fallbackReason = '';
+    if (prefs.searchProvider !== 'local' && hasApiKey()) {
+      try {
+        const results = await deepseekSearch(query, limit);
+        if (results.length) {
+          return {
+            type: 'text',
+            text: JSON.stringify({ query, engine: 'deepseek', results }, null, 2),
+          };
         }
-        return { title: document.title, url: location.href, results };
-      })()`,
-      400,
-    );
-    if (!data?.results?.length) throw new Error('未找到搜索结果');
+        fallbackReason = 'DeepSeek 搜索没有返回结果';
+      } catch (error) {
+        if (prefs.searchProvider === 'deepseek') throw error;
+        fallbackReason = error?.message || String(error);
+      }
+    } else if (prefs.searchProvider === 'deepseek') {
+      throw new Error('DeepSeek 搜索需要先配置 API Key');
+    }
+    const results = await localWebSearch(query, limit);
     return {
       type: 'text',
-      text: JSON.stringify({ query, engine: 'bing', results: data.results }, null, 2),
+      text: JSON.stringify(
+        { query, engine: 'bing', results, ...(fallbackReason ? { fallbackReason } : {}) },
+        null,
+        2,
+      ),
     };
   }
   if (tool === 'web_fetch') {
@@ -807,39 +1022,51 @@ async function handleBrowserTool(tool, args) {
     if (!raw) throw new Error('缺少目标 URL');
     const maxChars = Math.max(1000, Math.min(30000, Number(args?.maxChars) || 12000));
     const url = parseHttpUrl(raw);
-    const data = await runWebWorker(
-      url,
-      `(() => {
-        const maxChars = ${maxChars};
-        const candidates = [...document.querySelectorAll('article, main, [role="main"]')];
-        candidates.push(document.body);
-        const root = candidates
-          .filter(Boolean)
-          .sort((a, b) => ((b.innerText || '').length - (a.innerText || '').length))[0];
-        if (!root) return { title: document.title, url: location.href, description: '', content: '' };
-        const clone = root.cloneNode(true);
-        clone.querySelectorAll('script, style, noscript, svg, canvas, iframe, header, nav, footer, aside, form, button').forEach((el) => el.remove());
-        const content = (clone.innerText || clone.textContent || '')
-          .replace(/\\r/g, '')
-          .replace(/[ \\t]+/g, ' ')
-          .replace(/\\n{3,}/g, '\\n\\n')
-          .trim()
-          .slice(0, maxChars);
-        const description = document.querySelector('meta[name="description"]')?.content || '';
-        return {
-          title: document.title,
-          url: location.href,
-          description: (description + '').replace(/\\s+/g, ' ').trim().slice(0, 300),
-          content,
-        };
-      })()`,
-      500,
-    );
-    if (!data?.content) throw new Error('页面没有可读取的正文');
+    const prefs = readLocalToolsPrefs();
+    let fallbackReason = '';
+    if (prefs.searchProvider !== 'local' && hasApiKey()) {
+      try {
+        const fetched = await deepseekFetchPage(url);
+        if (fetched.content) {
+          return {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                title: fetched.title,
+                url,
+                description: '',
+                content: fetched.content.slice(0, maxChars),
+                requestedUrl: url,
+                engine: 'deepseek',
+              },
+              null,
+              2,
+            ),
+          };
+        }
+        fallbackReason = 'DeepSeek Fetch 没有返回正文';
+      } catch (error) {
+        if (prefs.searchProvider === 'deepseek') throw error;
+        fallbackReason = error?.message || String(error);
+      }
+    } else if (prefs.searchProvider === 'deepseek') {
+      throw new Error('DeepSeek Fetch 需要先配置 API Key');
+    }
+    const data = await localWebFetch(url, maxChars);
     return {
       type: 'text',
-      text: JSON.stringify({ ...data, requestedUrl: url }, null, 2),
+      text: JSON.stringify(
+        { ...data, requestedUrl: url, engine: 'bing', ...(fallbackReason ? { fallbackReason } : {}) },
+        null,
+        2,
+      ),
     };
+  }
+  if (tool === 'ocr') {
+    const filePath = typeof args?.path === 'string' ? args.path.trim() : '';
+    if (!filePath) throw new Error('缺少文件路径');
+    const result = await ocrFile(filePath, args?.purpose);
+    return { type: 'text', text: JSON.stringify(result, null, 2) };
   }
   const guest = await ensureBrowserGuest();
   if (tool === 'open_browser') {
@@ -1575,6 +1802,12 @@ handleIpc('app:pick-files', async () => {
   return result.filePaths;
 });
 
+handleIpc('app:ocr-file', async (_event, payload) => {
+  const filePath = typeof payload?.path === 'string' ? payload.path : '';
+  if (!filePath) throw new Error('缺少文件路径');
+  return ocrFile(filePath, payload?.purpose);
+});
+
 handleIpc('app:pick-images', async () => {
   if (!win) return [];
   const result = await dialog.showOpenDialog(win, {
@@ -1783,6 +2016,10 @@ handleIpc('app:set-local-tools', async (_event, payload) => {
     browser: Boolean(payload?.browser),
     computer: Boolean(payload?.computer),
     search: Boolean(payload?.search),
+    ocr: Boolean(payload?.ocr),
+    searchProvider: ['auto', 'deepseek', 'local'].includes(payload?.searchProvider)
+      ? payload.searchProvider
+      : 'auto',
   };
   fs.mkdirSync(path.dirname(localToolsPrefsFile()), { recursive: true });
   fs.writeFileSync(localToolsPrefsFile(), JSON.stringify(prefs));

@@ -285,12 +285,38 @@ declare global {
       showInFolder(targetPath: string): Promise<boolean>;
       openPath(targetPath: string): Promise<string>;
       restartEngine(): Promise<boolean>;
-      localToolsStatus(): Promise<{ browser: boolean; computer: boolean; search: boolean }>;
+      localToolsStatus(): Promise<{
+        browser: boolean;
+        computer: boolean;
+        search: boolean;
+        ocr: boolean;
+        searchProvider: 'auto' | 'deepseek' | 'local';
+      }>;
       setLocalTools(prefs: {
         browser: boolean;
         computer: boolean;
         search: boolean;
-      }): Promise<{ browser: boolean; computer: boolean; search: boolean }>;
+        ocr: boolean;
+        searchProvider: 'auto' | 'deepseek' | 'local';
+      }): Promise<{
+        browser: boolean;
+        computer: boolean;
+        search: boolean;
+        ocr: boolean;
+        searchProvider: 'auto' | 'deepseek' | 'local';
+      }>;
+      ocrFile(payload: {
+        path: string;
+        purpose?: 'text_recognition' | 'rich_layout_recognition';
+      }): Promise<{
+        name: string;
+        path: string;
+        purpose: string;
+        pageCount: number;
+        usage: { input_tokens?: number; output_tokens?: number; total_tokens?: number } | null;
+        text: string;
+        truncated: boolean;
+      }>;
       gitInfo(targetPath: string): Promise<{
         repo: boolean;
         root?: string;

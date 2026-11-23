@@ -312,6 +312,10 @@ export default function App() {
   const [worktree, setWorktree] = useState<WorktreeInfo | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
+  const [ocrAttachments, setOcrAttachments] = useState<
+    { path: string; name: string; pageCount: number; text: string; truncated: boolean }[]
+  >([]);
+  const [ocrBusy, setOcrBusy] = useState(false);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [dragging, setDragging] = useState(false);
   const [mention, setMention] = useState<MentionState | null>(null);
@@ -814,42 +818,96 @@ export default function App() {
     [input, mention],
   );
 
+  const ingestPaths = useCallback(async (paths: string[]) => {
+    if (!paths.length) return;
+    const images: string[] = [];
+    const inserted: string[] = [];
+    const documents: string[] = [];
+    for (const path of paths) {
+      if (/\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(path)) {
+        images.push(path);
+      } else if (/\.(pdf|docx?|pptx?)$/i.test(path)) {
+        documents.push(path);
+      } else {
+        let reference = path;
+        const cwd = (worktreeRef.current?.path || cwdRef.current || '').replace(/\\/g, '/');
+        const normalized = path.replace(/\\/g, '/');
+        if (cwd && normalized.toLowerCase().startsWith(`${cwd.toLowerCase()}/`)) {
+          reference = normalized.slice(cwd.length + 1);
+        }
+        inserted.push(`@${reference}`);
+      }
+    }
+    if (images.length) {
+      setAttachments((previous) => [...new Set([...previous, ...images])]);
+    }
+    if (documents.length) {
+      let ocrEnabled = false;
+      try {
+        ocrEnabled = Boolean((await window.codex.localToolsStatus()).ocr);
+      } catch {
+        ocrEnabled = false;
+      }
+      if (!ocrEnabled) {
+        inserted.push(
+          ...documents.map((path) => {
+            const cwd = (worktreeRef.current?.path || cwdRef.current || '').replace(/\\/g, '/');
+            const normalized = path.replace(/\\/g, '/');
+            const reference =
+              cwd && normalized.toLowerCase().startsWith(`${cwd.toLowerCase()}/`)
+                ? normalized.slice(cwd.length + 1)
+                : path;
+            return `@${reference}`;
+          }),
+        );
+      } else {
+        setOcrBusy(true);
+        for (const path of documents) {
+          try {
+            const result = await window.codex.ocrFile({ path, purpose: 'text_recognition' });
+            setOcrAttachments((previous) => [
+              ...previous,
+              {
+                path,
+                name: result.name,
+                pageCount: result.pageCount,
+                text: result.text,
+                truncated: result.truncated,
+              },
+            ]);
+            if (result.truncated) {
+              setNotice(`${result.name} 的 OCR 文本过长，已截断到 120,000 字符`);
+            }
+          } catch (error: any) {
+            setError(friendlyClientError(error));
+            inserted.push(`@${path}`);
+          }
+        }
+        setOcrBusy(false);
+      }
+    }
+    if (inserted.length) {
+      setInput((previous) => {
+        const prefix = previous && !previous.endsWith('\n') ? `${previous}\n` : previous;
+        return `${prefix}${inserted.join('\n')}`;
+      });
+    }
+  }, []);
+
   const addDroppedFiles = useCallback(
     (files: File[]) => {
-      if (!files.length) return;
-      const inserted: string[] = [];
-      const images: string[] = [];
+      const paths: string[] = [];
       for (const file of files) {
-        let filePath = '';
         try {
-          filePath = window.codex.pathForFile(file);
+          const filePath = window.codex.pathForFile(file);
+          if (filePath) paths.push(filePath);
         } catch {
-          filePath = '';
-        }
-        if (!filePath) continue;
-        if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(filePath)) {
-          images.push(filePath);
-        } else {
-          let reference = filePath;
-          const cwd = (worktreeRef.current?.path || cwdRef.current || '').replace(/\\/g, '/');
-          const normalized = filePath.replace(/\\/g, '/');
-          if (cwd && normalized.toLowerCase().startsWith(`${cwd.toLowerCase()}/`)) {
-            reference = normalized.slice(cwd.length + 1);
-          }
-          inserted.push(`@${reference}`);
+          /* ignore unsupported drops */
         }
       }
-      if (images.length) {
-        setAttachments((previous) => [...new Set([...previous, ...images])]);
-      }
-      if (inserted.length) {
-        setInput((previous) => {
-          const prefix = previous && !previous.endsWith('\n') ? `${previous}\n` : previous;
-          return `${prefix}${inserted.join('\n')}`;
-        });
-      }
+      void ingestPaths(paths);
     },
-    [],
+    [ingestPaths],
   );
 
   const refreshThreads = useCallback(async (announce = false) => {
@@ -1708,6 +1766,7 @@ export default function App() {
     setWorktree(null);
     worktreeRef.current = null;
     setAttachments([]);
+    setOcrAttachments([]);
     setGoal(null);
     setGoalDialogOpen(false);
     setGoalObjective('');
@@ -1916,12 +1975,8 @@ export default function App() {
 
   const pickFiles = useCallback(async () => {
     const paths = await window.codex.pickFiles();
-    if (!paths.length) return;
-    setInput((previous) => {
-      const prefix = previous && !previous.endsWith('\n') ? `${previous}\n` : previous;
-      return `${prefix}${paths.map((file) => `@${file}`).join('\n')}`;
-    });
-  }, []);
+    await ingestPaths(paths);
+  }, [ingestPaths]);
 
   const pickImages = useCallback(async () => {
     const paths = await window.codex.pickImages();
@@ -2599,14 +2654,23 @@ export default function App() {
   const buildTurnInput = useCallback(
     (text: string, files: string[] = attachments) => [
       { type: 'text', text, text_elements: [] },
+      ...ocrAttachments.map((doc) => ({
+        type: 'text',
+        text: `文件：${doc.name}（${doc.pageCount} 页${doc.truncated ? '，已截断' : ''}）\n${doc.text}`,
+        text_elements: [],
+      })),
       ...files.map((path) => ({ type: 'localImage', path })),
     ],
-    [attachments],
+    [attachments, ocrAttachments],
   );
 
   const send = useCallback(async (overrideText?: string) => {
     const text = (typeof overrideText === 'string' ? overrideText : input).trim();
     if (!text || !config || preparing) return;
+    if (ocrBusy) {
+      setError('文档仍在识别中，请稍后发送');
+      return;
+    }
     setError(null);
 
     if (runningRef.current) {
@@ -2625,6 +2689,7 @@ export default function App() {
           input: buildTurnInput(text, files),
         });
         setAttachments([]);
+        setOcrAttachments([]);
       } catch (steerError) {
         setInput((previous) => previous || text);
         setError(friendlyClientError(steerError));
@@ -2709,6 +2774,7 @@ export default function App() {
       setTurnId(turn?.turn?.id || null);
       setLastTurnId(turn?.turn?.id || null);
       setAttachments([]);
+      setOcrAttachments([]);
     } catch (sendError) {
       setRunning(false);
       pendingUserRef.current = null;
@@ -2717,7 +2783,7 @@ export default function App() {
       setInput((previous) => previous || text);
       setError(friendlyClientError(sendError));
     }
-  }, [attachments, buildTurnInput, config, input, preparing, refreshThreads, worktreeMode]);
+  }, [attachments, buildTurnInput, config, input, ocrBusy, preparing, refreshThreads, worktreeMode]);
 
   const retryLastTurn = useCallback(async () => {
     if (!threadRef.current || !lastTurnIdRef.current || runningRef.current) return;
@@ -3449,6 +3515,8 @@ export default function App() {
           modelListOpen={modelListOpen}
           modelMenuOpen={modelMenuOpen}
           models={models}
+          ocrAttachments={ocrAttachments}
+          ocrBusy={ocrBusy}
           onKeyDown={onKeyDown}
           onOpenGoal={() => openGoalDialog()}
           onSlashCommand={runSlashCommand}
@@ -3472,6 +3540,7 @@ export default function App() {
           setModelListOpen={setModelListOpen}
           setModelMenuOpen={setModelMenuOpen}
           setMode={setMode}
+          setOcrAttachments={setOcrAttachments}
           setRailOpen={setRailOpen}
           setSearchOpen={setSearchOpen}
           settings={settings}

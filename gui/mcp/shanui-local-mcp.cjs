@@ -9,6 +9,7 @@ const bridgeFile =
 const enableBrowser = process.env.SHANUI_ENABLE_BROWSER === '1';
 const enableComputer = process.env.SHANUI_ENABLE_COMPUTER === '1';
 const enableWebSearch = process.env.SHANUI_ENABLE_WEB_SEARCH === '1';
+const enableOcr = process.env.SHANUI_ENABLE_OCR === '1';
 
 function log(message) {
   process.stderr.write(`[shanui-local-mcp] ${message}\n`);
@@ -359,7 +360,7 @@ const searchTools = [
   {
     name: 'web_search',
     description:
-      'Search the public web in the background with Bing and return result titles, URLs, and snippets. Use web_fetch to read a result.',
+      'Search the public web in the background with DeepSeek Search when configured, falling back to Bing. Returns result titles, URLs, and snippets; use web_fetch to read a result.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -372,7 +373,7 @@ const searchTools = [
   {
     name: 'web_fetch',
     description:
-      'Fetch a public web page in the background and return its title, URL, description, and main text content.',
+      'Fetch a public web page in the background with DeepSeek Fetch when configured, falling back to a local renderer. Returns title, URL, description, and main text.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -380,6 +381,26 @@ const searchTools = [
         maxChars: { type: 'number', description: 'Maximum content characters, 1000-30000; defaults to 12000' },
       },
       required: ['url'],
+    },
+  },
+];
+
+const ocrTools = [
+  {
+    name: 'ocr',
+    description:
+      'Recognize text from a local PDF, Word, PowerPoint, or image file with DeepSeek OCR. Returns page-separated text.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Absolute path to a local document or image' },
+        purpose: {
+          type: 'string',
+          enum: ['text_recognition', 'rich_layout_recognition'],
+          description: 'text_recognition extracts text; rich_layout_recognition keeps layout markers',
+        },
+      },
+      required: ['path'],
     },
   },
 ];
@@ -454,6 +475,11 @@ async function callTool(name, args) {
     const result = await bridgeRequest(name, args || {});
     return { content: [{ type: 'text', text: result.text || '' }] };
   }
+  if (name === 'ocr') {
+    if (!enableOcr) throw new Error('文档识别（OCR）未启用');
+    const result = await bridgeRequest(name, args || {});
+    return { content: [{ type: 'text', text: result.text || '' }] };
+  }
   if (name.startsWith('browser_')) {
     if (!enableBrowser) throw new Error('浏览器控制未启用');
     const result = await bridgeRequest(name, args || {});
@@ -500,6 +526,7 @@ async function callTool(name, args) {
 const tools = [
   ...(enableBrowser ? browserTools : []),
   ...(enableWebSearch ? searchTools : []),
+  ...(enableOcr ? ocrTools : []),
   ...(enableComputer ? computerTools : []),
 ];
 

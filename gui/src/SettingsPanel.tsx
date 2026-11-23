@@ -62,6 +62,8 @@ export function SettingsPanel({
     browser: boolean;
     computer: boolean;
     search: boolean;
+    ocr: boolean;
+    searchProvider: 'auto' | 'deepseek' | 'local';
   } | null>(null);
   const [localToolsBusy, setLocalToolsBusy] = useState(false);
   const approvals: { value: RuntimeSettings['approvalPolicy']; title: string; description: string }[] = [
@@ -106,13 +108,23 @@ export function SettingsPanel({
     window.codex
       .localToolsStatus()
       .then(setLocalTools)
-      .catch(() => setLocalTools({ browser: false, computer: false, search: false }));
+      .catch(() =>
+        setLocalTools({
+          browser: false,
+          computer: false,
+          search: false,
+          ocr: false,
+          searchProvider: 'auto',
+        }),
+      );
   }, [tab]);
 
   const updateLocalTools = async (patch: Partial<{
     browser: boolean;
     computer: boolean;
     search: boolean;
+    ocr: boolean;
+    searchProvider: 'auto' | 'deepseek' | 'local';
   }>) => {
     if (!localTools || localToolsBusy) return;
     setLocalToolsBusy(true);
@@ -433,7 +445,7 @@ export function SettingsPanel({
             <div className="setting-row">
               <div className="setting-row-text">
                 <strong>网页搜索与读取</strong>
-                <span>允许 AI 在后台使用必应搜索并读取公开网页，不打开 Browser 面板</span>
+                <span>有 API Key 时优先使用 DeepSeek，失败自动回退本地必应</span>
               </div>
               <button
                 className={`switch ${localTools?.search ? 'on' : ''}`}
@@ -441,6 +453,43 @@ export function SettingsPanel({
                 aria-checked={Boolean(localTools?.search)}
                 disabled={!localTools || localToolsBusy}
                 onClick={() => void updateLocalTools({ search: !localTools?.search })}
+              >
+                <span />
+              </button>
+            </div>
+            {localTools?.search ? (
+              <div className="setting-row">
+                <div className="setting-row-text">
+                  <strong>搜索提供方</strong>
+                  <span>DeepSeek Search/Fetch 按成功请求计费；本地必应无需 Key</span>
+                </div>
+                <select
+                  className="setting-select"
+                  value={localTools.searchProvider}
+                  disabled={localToolsBusy}
+                  onChange={(event) =>
+                    void updateLocalTools({
+                      searchProvider: event.target.value as 'auto' | 'deepseek' | 'local',
+                    })
+                  }
+                >
+                  <option value="auto">自动（推荐）</option>
+                  <option value="deepseek">DeepSeek Search API</option>
+                  <option value="local">本地必应</option>
+                </select>
+              </div>
+            ) : null}
+            <div className="setting-row">
+              <div className="setting-row-text">
+                <strong>文档识别（OCR）</strong>
+                <span>PDF、Word、PPT 与图片自动识别文字；按页计费</span>
+              </div>
+              <button
+                className={`switch ${localTools?.ocr ? 'on' : ''}`}
+                role="switch"
+                aria-checked={Boolean(localTools?.ocr)}
+                disabled={!localTools || localToolsBusy}
+                onClick={() => void updateLocalTools({ ocr: !localTools?.ocr })}
               >
                 <span />
               </button>
@@ -461,7 +510,7 @@ export function SettingsPanel({
               </button>
             </div>
             <div className="setting-note">
-              每次工具调用仍需在对话中确认；新建会话后生效。浏览器控制只作用于内置 Browser 面板；网页搜索与读取在后台完成；电脑控制仅在本机、仅在你明确授权的任务中使用。
+              每次工具调用仍需在对话中确认；新建会话后生效。浏览器控制只作用于内置 Browser 面板；网页搜索与读取在后台完成；文档识别会上传文件到 DeepSeek OCR；电脑控制仅在本机、仅在你明确授权的任务中使用。
             </div>
           </div>
           <div className="setting-group">

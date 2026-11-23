@@ -7534,3 +7534,17 @@ pre::-webkit-scrollbar-button,
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+.attachment-chip.document small {
+  color: var(--faint);
+  font-size: 9.5px;
+}
+
+.ocr-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 6px;
+  color: var(--muted);
+  font-size: 10.5px;
+}

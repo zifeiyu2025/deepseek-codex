@@ -24,6 +24,7 @@ import {
   Image as ImageIcon,
   Info,
   ListChecks,
+  Loader2,
   Minimize2,
   Pencil,
   PanelRight,
@@ -67,6 +68,8 @@ export function Composer({
   modelListOpen,
   modelMenuOpen,
   models,
+  ocrAttachments,
+  ocrBusy,
   onKeyDown,
   onOpenGoal,
   onSlashCommand,
@@ -90,6 +93,7 @@ export function Composer({
   setModelListOpen,
   setModelMenuOpen,
   setMode,
+  setOcrAttachments,
   setRailOpen,
   setSearchOpen,
   settings,
@@ -118,6 +122,8 @@ export function Composer({
   modelListOpen: boolean;
   modelMenuOpen: boolean;
   models: ModelInfo[];
+  ocrAttachments: { path: string; name: string; pageCount: number; truncated: boolean }[];
+  ocrBusy: boolean;
   onKeyDown: (event: ReactKeyboardEvent<HTMLTextAreaElement>) => void;
   onOpenGoal: () => void;
   onSlashCommand: (id: SlashCommandId, argument?: string) => void;
@@ -141,6 +147,9 @@ export function Composer({
   setModelListOpen: Dispatch<SetStateAction<boolean>>;
   setModelMenuOpen: Dispatch<SetStateAction<boolean>>;
   setMode: Dispatch<SetStateAction<'default' | 'plan'>>;
+  setOcrAttachments: Dispatch<
+    SetStateAction<{ path: string; name: string; pageCount: number; text: string; truncated: boolean }[]>
+  >;
   setRailOpen: Dispatch<SetStateAction<boolean>>;
   setSearchOpen: Dispatch<SetStateAction<boolean>>;
   settings: RuntimeSettings;
@@ -530,6 +539,31 @@ export function Composer({
                   </span>
                 ) : null}
               </button>
+            ) : null}
+            {ocrAttachments.length > 0 ? (
+              <div className="attachment-row">
+                {ocrAttachments.map((doc) => (
+                  <span className="attachment-chip document" key={doc.path} title={doc.path}>
+                    <FileText size={12} />
+                    {doc.name}
+                    <small>
+                      {doc.pageCount} 页{doc.truncated ? ' · 已截断' : ''}
+                    </small>
+                    <button
+                      onClick={() =>
+                        setOcrAttachments((list) => list.filter((entry) => entry.path !== doc.path))
+                      }
+                    >
+                      <X size={10} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {ocrBusy ? (
+              <div className="ocr-status">
+                <Loader2 size={12} className="spin" /> 正在识别文档…
+              </div>
             ) : null}
             {attachments.length > 0 ? (
               <div className="attachment-row">
