@@ -79,10 +79,11 @@ import {
   formatTokens,
   nextRunLabel,
   sandboxLabel,
-  sandboxPolicyFor,
+  sandboxSelection,
   splitReviewComments,
   textOfContent,
   timeAgo,
+  turnSandboxSelection,
 } from './lib/format';
 import {
   activitySummary,
@@ -128,6 +129,7 @@ const DEFAULT_SETTINGS: RuntimeSettings = {
   approvalsReviewer: 'user',
   sandbox: 'danger-full-access',
   networkAccess: false,
+  permissionProfile: null,
   effort: 'high',
 };
 
@@ -1766,7 +1768,7 @@ export default function App() {
           modelProvider: config?.defaultProvider || 'deepseek',
           approvalPolicy: settingsRef.current.approvalPolicy,
           approvalsReviewer: settingsRef.current.approvalsReviewer,
-          sandbox: settingsRef.current.sandbox,
+          ...sandboxSelection(settingsRef.current),
           projectId: projectIdRef.current || undefined,
         });
         id = created?.thread?.id;
@@ -2163,6 +2165,44 @@ export default function App() {
         await openCapabilities();
       } catch (toggleError: any) {
         setError(friendlyClientError(toggleError));
+      } finally {
+        setCapabilityBusy(false);
+      }
+    },
+    [openCapabilities],
+  );
+
+  const updateHook = useCallback(
+    async (hook: any, patch: { enabled?: boolean; trust?: boolean }) => {
+      setCapabilityBusy(true);
+      try {
+        const basePath = `hooks.state.${JSON.stringify(hook.key)}`;
+        const edits: { keyPath: string; value: unknown; mergeStrategy: 'replace' }[] = [];
+        if (patch.enabled !== undefined) {
+          edits.push({
+            keyPath: `${basePath}.enabled`,
+            value: patch.enabled,
+            mergeStrategy: 'replace',
+          });
+        }
+        if (patch.trust) {
+          const hash = hook.currentHash || hook.current_hash;
+          if (!hash) throw new Error('该 Hook 没有可信任的哈希');
+          edits.push({
+            keyPath: `${basePath}.trusted_hash`,
+            value: hash,
+            mergeStrategy: 'replace',
+          });
+        }
+        if (!edits.length) return;
+        await window.codex.request('config/batchWrite', {
+          edits,
+          reloadUserConfig: true,
+        });
+        await openCapabilities();
+        setNotice('Hook 设置已更新');
+      } catch (hookError: any) {
+        setError(friendlyClientError(hookError));
       } finally {
         setCapabilityBusy(false);
       }
@@ -2740,7 +2780,7 @@ export default function App() {
             modelProvider: config.defaultProvider || 'deepseek',
             approvalPolicy: settingsRef.current.approvalPolicy,
             approvalsReviewer: settingsRef.current.approvalsReviewer,
-            sandbox: settingsRef.current.sandbox,
+            ...sandboxSelection(settingsRef.current),
             projectId: projectIdRef.current || undefined,
           });
           activeThread = created?.thread?.id;
@@ -2882,7 +2922,7 @@ export default function App() {
           modelProvider: config.defaultProvider || 'deepseek',
           approvalPolicy: activeSettings.approvalPolicy,
           approvalsReviewer: activeSettings.approvalsReviewer,
-          sandbox: activeSettings.sandbox,
+          ...sandboxSelection(activeSettings),
           projectId: projectIdRef.current || undefined,
         });
         activeThread = created?.thread?.id;
@@ -2896,7 +2936,7 @@ export default function App() {
         model: modelRef.current,
         approvalPolicy: activeSettings.approvalPolicy,
         effort: activeSettings.effort,
-        sandboxPolicy: sandboxPolicyFor(activeSettings.sandbox, activeSettings.networkAccess),
+        ...turnSandboxSelection(activeSettings),
         input: buildTurnInput(turnText, files),
       };
       if (modeRef.current === 'plan') {
@@ -3225,7 +3265,7 @@ export default function App() {
         model: modelRef.current,
         approvalPolicy: settingsRef.current.approvalPolicy,
         effort: settingsRef.current.effort,
-        sandboxPolicy: sandboxPolicyFor(settingsRef.current.sandbox, settingsRef.current.networkAccess),
+        ...turnSandboxSelection(settingsRef.current),
         input: [{ type: 'text', text: prompt, text_elements: [] }],
       });
       setTurnId(turn?.turn?.id || null);
@@ -4534,21 +4574,50 @@ export default function App() {
                     if (hooks.length === 0) {
                       return <div className="cap-empty">当前目录没有配置 Hooks</div>;
                     }
-                    return hooks.map((hook: any) => (
-                      <div className="cap-row" key={hook.key}>
-                        <div>
-                          <strong>
-                            <span className={`cap-status-dot ${hook.enabled ? 'ok' : 'off'}`} />
-                            {hook.eventName || hook.event_name || 'hook'}
-                          </strong>
-                          <span>
-                            {hook.matcher ? `${hook.matcher} · ` : ''}
-                            {hook.enabled ? '启用' : '禁用'} · {hook.sourcePath || hook.source_path || ''}
-                          </span>
+                    return hooks.map((hook: any) => {
+                      const trust = String(hook.trustStatus || hook.trust_status || 'unknown').toLowerCase();
+                      const trustLabel: Record<string, string> = {
+                        trusted: '已信任',
+                        untrusted: '未信任',
+                        modified: '已修改',
+                        managed: '托管',
+                      };
+                      return (
+                        <div className="cap-row" key={hook.key}>
+                          <div>
+                            <strong>
+                              <span className={`cap-status-dot ${hook.enabled ? 'ok' : 'off'}`} />
+                              {hook.eventName || hook.event_name || 'hook'}
+                            </strong>
+                            <span>
+                              {hook.matcher ? `${hook.matcher} · ` : ''}
+                              {trustLabel[trust] || trust} · {hook.sourcePath || hook.source_path || ''}
+                            </span>
+                          </div>
+                          <div className="cap-actions">
+                            <button
+                              className="cap-btn"
+                              disabled={capabilityBusy || hook.isManaged || hook.is_managed}
+                              onClick={() => void updateHook(hook, { enabled: !hook.enabled })}
+                            >
+                              {hook.enabled ? '禁用' : '启用'}
+                            </button>
+                            {trust !== 'trusted' && trust !== 'managed' && !hook.isManaged && !hook.is_managed ? (
+                              <button
+                                className="cap-btn"
+                                disabled={capabilityBusy}
+                                onClick={() => void updateHook(hook, { trust: true })}
+                              >
+                                信任
+                              </button>
+                            ) : null}
+                            <span className="cap-meta">
+                              {hook.timeoutSec ?? hook.timeout_sec ?? '-'}s
+                            </span>
+                          </div>
                         </div>
-                        <span className="cap-meta">{hook.timeoutSec ?? hook.timeout_sec ?? '-'}s</span>
-                      </div>
-                    ));
+                      );
+                    });
                   })()}
                 </div>
 

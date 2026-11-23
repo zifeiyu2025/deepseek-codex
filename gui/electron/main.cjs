@@ -82,6 +82,7 @@ const ALLOWED_METHODS = new Set([
   'mcpServer/resource/read',
   'windowsSandbox/readiness',
   'windowsSandbox/setupStart',
+  'permissionProfile/list',
   'skills/list',
   'plugin/list',
   'plugin/install',

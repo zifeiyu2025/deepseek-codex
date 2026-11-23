@@ -80,6 +80,9 @@ export function SettingsPanel({
   const [computerHistory, setComputerHistory] = useState<
     { at: number; tool: string; args: Record<string, unknown>; ok: boolean; error?: string }[]
   >([]);
+  const [permissionProfiles, setPermissionProfiles] = useState<
+    { id: string; description: string | null; allowed: boolean }[]
+  >([]);
   const approvals: { value: RuntimeSettings['approvalPolicy']; title: string; description: string }[] = [
     { value: 'on-request', title: '按需确认', description: '只在需要越权或执行敏感操作时询问' },
     { value: 'untrusted', title: '全部确认', description: '每个命令与修改都需要你确认' },
@@ -205,6 +208,18 @@ export function SettingsPanel({
       setSettingsNotice(friendlyClientError(error));
     }
   };
+
+  useEffect(() => {
+    if (tab !== 'runtime') return;
+    window.codex
+      .request('permissionProfile/list', {})
+      .then((response) =>
+        setPermissionProfiles(
+          (response?.data || []).filter((profile: any) => profile?.allowed !== false),
+        ),
+      )
+      .catch(() => setPermissionProfiles([]));
+  }, [tab]);
 
   useEffect(() => {
     if (tab !== 'diagnostics' || sandboxReadiness !== null) return;
@@ -402,6 +417,7 @@ export function SettingsPanel({
             <select
               className="setting-select"
               value={draft.sandbox}
+              disabled={Boolean(draft.permissionProfile)}
               onChange={(event) =>
                 applyDraft({
                   ...draft,
@@ -416,7 +432,31 @@ export function SettingsPanel({
               ))}
             </select>
           </div>
-          {draft.sandbox === 'workspace-write' ? (
+          <div className="setting-row">
+            <div className="setting-row-text">
+              <strong>权限配置（Profiles）</strong>
+              <span>选择后在 config.toml 的 permissions profile 中解析权限，覆盖沙箱与网络设置</span>
+            </div>
+            <select
+              className="setting-select"
+              value={draft.permissionProfile || ''}
+              onChange={(event) =>
+                applyDraft({
+                  ...draft,
+                  permissionProfile: event.target.value || null,
+                })
+              }
+            >
+              <option value="">使用沙箱选项</option>
+              {permissionProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.id}
+                  {profile.description ? ` · ${profile.description}` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+          {draft.sandbox === 'workspace-write' && !draft.permissionProfile ? (
             <div className="setting-row">
               <div className="setting-row-text">
                 <strong>工作区网络访问</strong>

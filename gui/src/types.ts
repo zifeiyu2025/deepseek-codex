@@ -106,6 +106,7 @@ export type RuntimeSettings = {
   approvalsReviewer: 'user' | 'auto_review';
   sandbox: 'read-only' | 'workspace-write' | 'danger-full-access';
   networkAccess: boolean;
+  permissionProfile: string | null;
   effort: 'low' | 'high' | 'max';
 };
 

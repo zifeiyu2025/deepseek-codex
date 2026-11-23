@@ -107,6 +107,16 @@ export function sandboxPolicyFor(
   return { type: 'dangerFullAccess' };
 }
 
+export function sandboxSelection(settings: RuntimeSettings): Record<string, unknown> {
+  if (settings.permissionProfile) return { permissions: settings.permissionProfile };
+  return { sandbox: settings.sandbox };
+}
+
+export function turnSandboxSelection(settings: RuntimeSettings): Record<string, unknown> {
+  if (settings.permissionProfile) return { permissions: settings.permissionProfile };
+  return { sandboxPolicy: sandboxPolicyFor(settings.sandbox, settings.networkAccess) };
+}
+
 export function effortLabel(value: string): string {
   const labels: Record<string, string> = {
     low: '低',
