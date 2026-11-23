@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('codex', {
   browserActivate: (webContentsId) => ipcRenderer.invoke('browser:activate', webContentsId),
   captureScreen: () => ipcRenderer.invoke('app:capture-screen'),
   browserSavePageShot: (dataUrl) => ipcRenderer.invoke('browser:save-page-shot', dataUrl),
+  getComputerHistory: () => ipcRenderer.invoke('app:get-computer-history'),
+  clearComputerHistory: () => ipcRenderer.invoke('app:clear-computer-history'),
   savePastedImage: () => ipcRenderer.invoke('app:save-pasted-image'),
   pathForFile: (file) => webUtils.getPathForFile(file),
   createWorktree: (repoPath) => ipcRenderer.invoke('app:create-worktree', repoPath),

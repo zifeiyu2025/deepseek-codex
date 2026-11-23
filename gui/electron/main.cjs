@@ -202,6 +202,10 @@ function localMcpScriptPath() {
     : path.join(ROOT, 'mcp', 'shanui-local-mcp.cjs');
 }
 
+function computerHistoryFile() {
+  return path.join(app.getPath('userData'), 'computer-history.json');
+}
+
 function readLocalToolsPrefs() {
   const fallback = {
     browser: false,
@@ -355,6 +359,7 @@ function localMcpServerConfig(prefs) {
       SHANUI_ENABLE_OCR: prefs.ocr ? '1' : '0',
       SHANUI_COMPUTER_ALLOWED_APPS: JSON.stringify(prefs.computerAllowedApps || []),
       SHANUI_BROWSER_FULL_CDP: prefs.browserFullCdp ? '1' : '0',
+      SHANUI_COMPUTER_HISTORY_FILE: computerHistoryFile(),
     },
     default_tools_approval_mode: 'prompt',
     tool_timeout_sec: 120,
@@ -2155,6 +2160,24 @@ handleIpc('browser:activate', (_event, webContentsId) => {
   const guest = webContents.fromId(id);
   if (!guest || guest.isDestroyed()) return false;
   browserGuest = guest;
+  return true;
+});
+
+handleIpc('app:get-computer-history', () => {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(computerHistoryFile(), 'utf8'));
+    return Array.isArray(parsed) ? parsed.slice(0, 50) : [];
+  } catch {
+    return [];
+  }
+});
+
+handleIpc('app:clear-computer-history', () => {
+  try {
+    fs.rmSync(computerHistoryFile(), { force: true });
+  } catch {
+    /* ignore */
+  }
   return true;
 });
 

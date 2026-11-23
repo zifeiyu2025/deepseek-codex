@@ -77,6 +77,9 @@ export function SettingsPanel({
     [],
   );
   const [browserBusy, setBrowserBusy] = useState(false);
+  const [computerHistory, setComputerHistory] = useState<
+    { at: number; tool: string; args: Record<string, unknown>; ok: boolean; error?: string }[]
+  >([]);
   const approvals: { value: RuntimeSettings['approvalPolicy']; title: string; description: string }[] = [
     { value: 'on-request', title: '按需确认', description: '只在需要越权或执行敏感操作时询问' },
     { value: 'untrusted', title: '全部确认', description: '每个命令与修改都需要你确认' },
@@ -122,6 +125,10 @@ export function SettingsPanel({
     } catch {
       setBrowserHistory([]);
     }
+    window.codex
+      .getComputerHistory()
+      .then((list) => setComputerHistory(Array.isArray(list) ? list : []))
+      .catch(() => setComputerHistory([]));
     window.codex
       .localToolsStatus()
       .then((status) => {
@@ -186,6 +193,16 @@ export function SettingsPanel({
       setSettingsNotice(friendlyClientError(error));
     } finally {
       setBrowserBusy(false);
+    }
+  };
+
+  const clearComputerHistoryLog = async () => {
+    try {
+      await window.codex.clearComputerHistory();
+      setComputerHistory([]);
+      setSettingsNotice('电脑操作历史已清除');
+    } catch (error: any) {
+      setSettingsNotice(friendlyClientError(error));
     }
   };
 
@@ -730,6 +747,35 @@ export function SettingsPanel({
             ) : null}
             <div className="setting-note">
               每次工具调用仍需在对话中确认；新建会话后生效。浏览器控制只作用于内置 Browser 面板；网页搜索与读取在后台完成；文档识别会上传文件到 DeepSeek OCR；电脑控制仅在本机、仅在你明确授权的任务中使用。
+            </div>
+          </div>
+          <div className="setting-group">
+            <div className="setting-label">电脑操作历史</div>
+            {computerHistory.length > 0 ? (
+              <div className="browser-history-list">
+                {computerHistory.slice(0, 8).map((entry) => (
+                  <div
+                    className="browser-history-row"
+                    key={`${entry.at}-${entry.tool}`}
+                    title={entry.error || ''}
+                  >
+                    <span>
+                      {entry.tool.replace(/^computer_/, '')} {entry.ok ? '✓' : '✗'}
+                    </span>
+                    <small>
+                      {new Date(entry.at).toLocaleString('zh-CN', { hour12: false })} ·{' '}
+                      {JSON.stringify(entry.args)}
+                    </small>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="cap-empty">暂无电脑操作记录</div>
+            )}
+            <div className="settings-inline-actions">
+              <button onClick={() => void clearComputerHistoryLog()} disabled={!computerHistory.length}>
+                清除历史
+              </button>
             </div>
           </div>
           <div className="setting-group">

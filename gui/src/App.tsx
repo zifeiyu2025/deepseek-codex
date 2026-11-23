@@ -2019,9 +2019,13 @@ export default function App() {
 
   useEffect(() => {
     const attach = (event: Event) => {
-      const path = (event as CustomEvent<{ path?: string }>).detail?.path;
+      const detail = (event as CustomEvent<{ path?: string; text?: string }>).detail;
+      const path = detail?.path;
       if (!path) return;
       setAttachments((previous) => [...new Set([...previous, path])]);
+      if (detail?.text) {
+        setInput((previous) => (previous ? `${previous}\n${detail.text}` : detail.text || ''));
+      }
       setNotice('已附加页面截图');
     };
     window.addEventListener('deepseek-codex:attach-image', attach);

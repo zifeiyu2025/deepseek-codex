@@ -338,6 +338,16 @@ declare global {
       browserActivate(webContentsId: number): Promise<boolean>;
       captureScreen(): Promise<string>;
       browserSavePageShot(dataUrl: string): Promise<string>;
+      getComputerHistory(): Promise<
+        {
+          at: number;
+          tool: string;
+          args: Record<string, unknown>;
+          ok: boolean;
+          error?: string;
+        }[]
+      >;
+      clearComputerHistory(): Promise<boolean>;
       gitInfo(targetPath: string): Promise<{
         repo: boolean;
         root?: string;

@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
 import {
@@ -29,6 +30,7 @@ import { Highlight, Prism, themes } from 'prism-react-renderer';
 import type { FileContent, FileEntry } from './types';
 import { friendlyClientError } from './lib/errors';
 import { readStorage, writeStorage } from './lib/storage';
+import { Modal } from './components/Modal';
 
 const BROWSER_HISTORY_KEY = 'deepseek-codex.browserHistory';
 
@@ -750,6 +752,16 @@ export function BrowserPanel({ active }: { active: boolean }) {
   const tabSeqRef = useRef(0);
   const activeIdRef = useRef<string | null>(null);
   const activeTab = tabs.find((tab) => tab.id === activeId) || null;
+  const [shotEditor, setShotEditor] = useState<{ dataUrl: string; comment: string } | null>(null);
+  const [shotSelection, setShotSelection] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
+  const [shotBusy, setShotBusy] = useState(false);
+  const shotImgRef = useRef<HTMLImageElement | null>(null);
+  const shotDragRef = useRef<{ x: number; y: number } | null>(null);
 
   const patchTab = (id: string, patch: Partial<BrowserTab>) => {
     setTabs((list) => list.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab)));
@@ -835,14 +847,72 @@ export function BrowserPanel({ active }: { active: boolean }) {
         }
       }
       if (!image) throw lastError || new Error('页面截图为空');
-      const path = await window.codex.browserSavePageShot(image.toDataURL());
-      if (path) {
-        window.dispatchEvent(
-          new CustomEvent('deepseek-codex:attach-image', { detail: { path } }),
-        );
-      }
+      setShotSelection(null);
+      setShotEditor({ dataUrl: image.toDataURL(), comment: '' });
     } catch (error: any) {
       if (activeId) patchTab(activeId, { error: friendlyClientError(error) });
+    }
+  };
+
+  const selectionPoint = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const image = shotImgRef.current;
+    if (!image) return { x: 0, y: 0 };
+    const rect = image.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(rect.width, event.clientX - rect.left)),
+      y: Math.max(0, Math.min(rect.height, event.clientY - rect.top)),
+    };
+  };
+
+  const saveShot = async () => {
+    if (!shotEditor || shotBusy) return;
+    setShotBusy(true);
+    try {
+      let dataUrl = shotEditor.dataUrl;
+      const image = shotImgRef.current;
+      if (
+        image &&
+        shotSelection &&
+        shotSelection.w > 4 &&
+        shotSelection.h > 4 &&
+        image.clientWidth > 0 &&
+        image.clientHeight > 0
+      ) {
+        const scaleX = image.naturalWidth / image.clientWidth;
+        const scaleY = image.naturalHeight / image.clientHeight;
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(shotSelection.w * scaleX));
+        canvas.height = Math.max(1, Math.round(shotSelection.h * scaleY));
+        const context = canvas.getContext('2d');
+        if (context) {
+          context.drawImage(
+            image,
+            shotSelection.x * scaleX,
+            shotSelection.y * scaleY,
+            shotSelection.w * scaleX,
+            shotSelection.h * scaleY,
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+          );
+          dataUrl = canvas.toDataURL('image/png');
+        }
+      }
+      const path = await window.codex.browserSavePageShot(dataUrl);
+      if (path) {
+        window.dispatchEvent(
+          new CustomEvent('deepseek-codex:attach-image', {
+            detail: { path, text: shotEditor.comment.trim() || undefined },
+          }),
+        );
+      }
+      setShotEditor(null);
+      setShotSelection(null);
+    } catch (error: any) {
+      if (activeId) patchTab(activeId, { error: friendlyClientError(error) });
+    } finally {
+      setShotBusy(false);
     }
   };
 
@@ -1120,6 +1190,89 @@ export function BrowserPanel({ active }: { active: boolean }) {
           <div className="files-empty">输入本地开发服务器地址，预览页面。</div>
         ) : null}
       </div>
+      {shotEditor ? (
+        <Modal
+          onClose={() => {
+            if (!shotBusy) {
+              setShotEditor(null);
+              setShotSelection(null);
+            }
+          }}
+          labelledBy="shot-editor-title"
+        >
+          <div className="key-card shot-card">
+            <div className="key-kicker">PAGE SHOT</div>
+            <h2 id="shot-editor-title">截取页面区域</h2>
+            <p>拖动选择区域；不选择则使用整页可见截图。</p>
+            <div
+              className="shot-canvas"
+              onPointerDown={(event) => {
+                event.preventDefault();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                const point = selectionPoint(event);
+                shotDragRef.current = point;
+                setShotSelection({ x: point.x, y: point.y, w: 0, h: 0 });
+              }}
+              onPointerMove={(event) => {
+                const start = shotDragRef.current;
+                if (!start) return;
+                const point = selectionPoint(event);
+                setShotSelection({
+                  x: Math.min(start.x, point.x),
+                  y: Math.min(start.y, point.y),
+                  w: Math.abs(point.x - start.x),
+                  h: Math.abs(point.y - start.y),
+                });
+              }}
+              onPointerUp={() => {
+                shotDragRef.current = null;
+              }}
+            >
+              <img
+                ref={shotImgRef}
+                src={shotEditor.dataUrl}
+                alt="页面截图"
+                draggable={false}
+              />
+              {shotSelection ? (
+                <div
+                  className="shot-selection"
+                  style={{
+                    left: shotSelection.x,
+                    top: shotSelection.y,
+                    width: shotSelection.w,
+                    height: shotSelection.h,
+                  }}
+                />
+              ) : null}
+            </div>
+            <input
+              className="shot-comment"
+              value={shotEditor.comment}
+              onChange={(event) =>
+                setShotEditor((current) =>
+                  current ? { ...current, comment: event.target.value } : current,
+                )
+              }
+              placeholder="给这张截图的说明（可选）"
+            />
+            <div className="key-actions">
+              <button onClick={() => void saveShot()} disabled={shotBusy}>
+                {shotBusy ? '保存中…' : '附加截图'}
+              </button>
+              <button
+                onClick={() => {
+                  setShotEditor(null);
+                  setShotSelection(null);
+                }}
+                disabled={shotBusy}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
     </div>
   );
 }

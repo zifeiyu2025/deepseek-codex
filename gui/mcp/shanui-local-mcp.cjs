@@ -538,6 +538,70 @@ const computerTools = [
   },
 ];
 
+async function runComputerTool(name, args) {
+  if (name === 'computer_screenshot') {
+    const image = await computerScreenshot(args);
+    return { content: [{ type: 'image', data: image.data, mimeType: image.mimeType }] };
+  }
+  if (name === 'computer_monitors') {
+    return { content: [{ type: 'text', text: await computerMonitors() }] };
+  }
+  if (name === 'computer_active_window') {
+    return { content: [{ type: 'text', text: await computerActiveWindow() }] };
+  }
+  if (name === 'computer_move') {
+    return { content: [{ type: 'text', text: await computerMouse('move', args) }] };
+  }
+  if (name === 'computer_click') {
+    return { content: [{ type: 'text', text: await computerMouse('click', args) }] };
+  }
+  if (name === 'computer_type') {
+    return { content: [{ type: 'text', text: await computerType(args) }] };
+  }
+  if (name === 'computer_key') {
+    return { content: [{ type: 'text', text: await computerKey(args) }] };
+  }
+  if (name === 'computer_scroll') {
+    return { content: [{ type: 'text', text: await computerScroll(args) }] };
+  }
+  throw new Error(`未知电脑工具：${name}`);
+}
+
+function recordComputerHistory(name, args, ok, error) {
+  const file = process.env.SHANUI_COMPUTER_HISTORY_FILE;
+  if (!file) return;
+  const safe = {};
+  for (const key of ['screen', 'x', 'y', 'button', 'direction', 'pages', 'key']) {
+    if (args?.[key] !== undefined) safe[key] = args[key];
+  }
+  if (typeof args?.text === 'string') safe.textLength = args.text.length;
+  try {
+    let list = [];
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (Array.isArray(parsed)) list = parsed;
+    } catch {
+      list = [];
+    }
+    list.unshift({ at: Date.now(), tool: name, args: safe, ok, ...(error ? { error } : {}) });
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(list.slice(0, 100)));
+  } catch {
+    /* history is best-effort */
+  }
+}
+
+async function withComputerHistory(name, args) {
+  try {
+    const result = await runComputerTool(name, args);
+    recordComputerHistory(name, args, true);
+    return result;
+  } catch (error) {
+    recordComputerHistory(name, args, false, String(error?.message || error).slice(0, 300));
+    throw error;
+  }
+}
+
 async function callTool(name, args) {
   if (name === 'web_search' || name === 'web_fetch') {
     if (!enableWebSearch) throw new Error('网页搜索未启用');
@@ -566,31 +630,7 @@ async function callTool(name, args) {
   }
   if (name.startsWith('computer_')) {
     if (!enableComputer) throw new Error('电脑控制未启用');
-    if (name === 'computer_screenshot') {
-      const image = await computerScreenshot(args || {});
-      return { content: [{ type: 'image', data: image.data, mimeType: image.mimeType }] };
-    }
-    if (name === 'computer_monitors') {
-      return { content: [{ type: 'text', text: await computerMonitors() }] };
-    }
-    if (name === 'computer_active_window') {
-      return { content: [{ type: 'text', text: await computerActiveWindow() }] };
-    }
-    if (name === 'computer_move') {
-      return { content: [{ type: 'text', text: await computerMouse('move', args || {}) }] };
-    }
-    if (name === 'computer_click') {
-      return { content: [{ type: 'text', text: await computerMouse('click', args || {}) }] };
-    }
-    if (name === 'computer_type') {
-      return { content: [{ type: 'text', text: await computerType(args || {}) }] };
-    }
-    if (name === 'computer_key') {
-      return { content: [{ type: 'text', text: await computerKey(args || {}) }] };
-    }
-    if (name === 'computer_scroll') {
-      return { content: [{ type: 'text', text: await computerScroll(args || {}) }] };
-    }
+    return withComputerHistory(name, args || {});
   }
   throw new Error(`未知工具：${name}`);
 }
