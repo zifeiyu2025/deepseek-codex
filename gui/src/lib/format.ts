@@ -88,7 +88,10 @@ export function sandboxLabel(sandbox: RuntimeSettings['sandbox']): string {
   return '完全访问';
 }
 
-export function sandboxPolicyFor(sandbox: RuntimeSettings['sandbox']): Record<string, unknown> {
+export function sandboxPolicyFor(
+  sandbox: RuntimeSettings['sandbox'],
+  networkAccess = false,
+): Record<string, unknown> {
   if (sandbox === 'read-only') {
     return { type: 'readOnly', networkAccess: false };
   }
@@ -96,7 +99,7 @@ export function sandboxPolicyFor(sandbox: RuntimeSettings['sandbox']): Record<st
     return {
       type: 'workspaceWrite',
       writableRoots: [],
-      networkAccess: false,
+      networkAccess,
       excludeTmpdirEnvVar: false,
       excludeSlashTmp: false,
     };

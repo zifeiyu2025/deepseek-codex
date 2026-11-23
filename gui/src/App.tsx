@@ -124,7 +124,9 @@ type RailTab = 'files' | 'browser' | 'review';
 
 const DEFAULT_SETTINGS: RuntimeSettings = {
   approvalPolicy: 'on-request',
+  approvalsReviewer: 'user',
   sandbox: 'danger-full-access',
+  networkAccess: false,
   effort: 'high',
 };
 
@@ -376,6 +378,7 @@ export default function App() {
   const automationWatchdogsRef = useRef(new Map<string, number>());
   const mentionSeqRef = useRef(0);
   const goalRequestRef = useRef(0);
+  const mcpSessionAllowedRef = useRef(new Set<string>());
   const worktreeRef = useRef<WorktreeInfo | null>(null);
   const pendingUserRef = useRef<string | null>(null);
   const gitRequestRef = useRef(0);
@@ -1509,9 +1512,14 @@ export default function App() {
         return;
       }
       if (request.method === 'mcpServer/elicitation/request') {
+        const serverName = request.params?.serverName;
+        if (serverName && mcpSessionAllowedRef.current.has(serverName)) {
+          window.codex.respond(request.id, { action: 'accept', content: null, meta: null });
+          return;
+        }
         setMcpElicitation({
           id: request.id,
-          serverName: request.params?.serverName,
+          serverName,
           message:
             request.params?.message ||
             request.params?.request?.message ||
@@ -1577,8 +1585,11 @@ export default function App() {
   }, [input]);
 
   const respondMcpElicitation = useCallback(
-    (action: 'accept' | 'decline' | 'cancel') => {
+    (action: 'accept' | 'decline' | 'cancel', remember = false) => {
       if (!mcpElicitation) return;
+      if (remember && mcpElicitation.serverName) {
+        mcpSessionAllowedRef.current.add(mcpElicitation.serverName);
+      }
       setMcpElicitation(null);
       window.codex.respond(mcpElicitation.id, { action, content: null, meta: null });
     },
@@ -1686,6 +1697,7 @@ export default function App() {
           model: modelRef.current,
           modelProvider: config?.defaultProvider || 'deepseek',
           approvalPolicy: settingsRef.current.approvalPolicy,
+          approvalsReviewer: settingsRef.current.approvalsReviewer,
           sandbox: settingsRef.current.sandbox,
           projectId: projectIdRef.current || undefined,
         });
@@ -1767,6 +1779,7 @@ export default function App() {
     worktreeRef.current = null;
     setAttachments([]);
     setOcrAttachments([]);
+    mcpSessionAllowedRef.current.clear();
     setGoal(null);
     setGoalDialogOpen(false);
     setGoalObjective('');
@@ -2623,6 +2636,7 @@ export default function App() {
             model: modelRef.current,
             modelProvider: config.defaultProvider || 'deepseek',
             approvalPolicy: settingsRef.current.approvalPolicy,
+            approvalsReviewer: settingsRef.current.approvalsReviewer,
             sandbox: settingsRef.current.sandbox,
             projectId: projectIdRef.current || undefined,
           });
@@ -2743,6 +2757,7 @@ export default function App() {
           model: modelRef.current,
           modelProvider: config.defaultProvider || 'deepseek',
           approvalPolicy: activeSettings.approvalPolicy,
+          approvalsReviewer: activeSettings.approvalsReviewer,
           sandbox: activeSettings.sandbox,
           projectId: projectIdRef.current || undefined,
         });
@@ -2757,7 +2772,7 @@ export default function App() {
         model: modelRef.current,
         approvalPolicy: activeSettings.approvalPolicy,
         effort: activeSettings.effort,
-        sandboxPolicy: sandboxPolicyFor(activeSettings.sandbox),
+        sandboxPolicy: sandboxPolicyFor(activeSettings.sandbox, activeSettings.networkAccess),
         input: buildTurnInput(text, files),
       };
       if (modeRef.current === 'plan') {
@@ -2981,7 +2996,7 @@ export default function App() {
         model: modelRef.current,
         approvalPolicy: settingsRef.current.approvalPolicy,
         effort: settingsRef.current.effort,
-        sandboxPolicy: sandboxPolicyFor(settingsRef.current.sandbox),
+        sandboxPolicy: sandboxPolicyFor(settingsRef.current.sandbox, settingsRef.current.networkAccess),
         input: [{ type: 'text', text: prompt, text_elements: [] }],
       });
       setTurnId(turn?.turn?.id || null);
@@ -3758,6 +3773,11 @@ export default function App() {
             <p>{mcpElicitation.message}</p>
             <div className="key-actions">
               <button onClick={() => respondMcpElicitation('decline')}>拒绝</button>
+              {mcpElicitation.serverName ? (
+                <button onClick={() => respondMcpElicitation('accept', true)}>
+                  本次会话允许
+                </button>
+              ) : null}
               <button className="primary" onClick={() => respondMcpElicitation('accept')}>
                 允许
               </button>

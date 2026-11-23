@@ -76,7 +76,7 @@ export function SettingsPanel({
     {
       value: 'workspace-write',
       title: '工作区可写',
-      description: '只能修改当前工作区与临时目录，网络需申请',
+      description: '只能修改当前工作区与临时目录，网络由下方开关控制',
     },
     {
       value: 'danger-full-access',
@@ -306,6 +306,29 @@ export function SettingsPanel({
           </div>
           <div className="setting-row">
             <div className="setting-row-text">
+              <strong>审批审查者</strong>
+              <span>
+                {draft.approvalsReviewer === 'auto_review'
+                  ? '由模型预审风险后再决定是否批准（新会话生效）'
+                  : '所有审批请求都交给你确认'}
+              </span>
+            </div>
+            <select
+              className="setting-select"
+              value={draft.approvalsReviewer}
+              onChange={(event) =>
+                applyDraft({
+                  ...draft,
+                  approvalsReviewer: event.target.value as RuntimeSettings['approvalsReviewer'],
+                })
+              }
+            >
+              <option value="user">由我审批</option>
+              <option value="auto_review">自动审查</option>
+            </select>
+          </div>
+          <div className="setting-row">
+            <div className="setting-row-text">
               <strong>沙箱权限</strong>
               <span>{sandboxes.find((option) => option.value === draft.sandbox)?.description}</span>
             </div>
@@ -326,6 +349,22 @@ export function SettingsPanel({
               ))}
             </select>
           </div>
+          {draft.sandbox === 'workspace-write' ? (
+            <div className="setting-row">
+              <div className="setting-row-text">
+                <strong>工作区网络访问</strong>
+                <span>允许工作区内的命令访问网络；关闭时仅能访问本地资源</span>
+              </div>
+              <button
+                className={`switch ${draft.networkAccess ? 'on' : ''}`}
+                role="switch"
+                aria-checked={draft.networkAccess}
+                onClick={() => applyDraft({ ...draft, networkAccess: !draft.networkAccess })}
+              >
+                <span />
+              </button>
+            </div>
+          ) : null}
         </div>
 
         <div className="setting-group">

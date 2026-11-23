@@ -99,7 +99,9 @@ export type RpcNotification = {
 
 export type RuntimeSettings = {
   approvalPolicy: 'untrusted' | 'on-request' | 'never';
+  approvalsReviewer: 'user' | 'auto_review';
   sandbox: 'read-only' | 'workspace-write' | 'danger-full-access';
+  networkAccess: boolean;
   effort: 'low' | 'high' | 'max';
 };
 
