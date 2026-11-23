@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowLeft, Loader2, Search } from 'lucide-react';
 import type { AppConfig, ModelInfo, RuntimeSettings, SettingsTab } from './types';
 import { friendlyClientError } from './lib/errors';
 import { effortLabel, formatTokens } from './lib/format';
+import { readStorage, removeStorage } from './lib/storage';
 
 export function SettingsPanel({
   settings,
@@ -64,8 +65,14 @@ export function SettingsPanel({
     search: boolean;
     ocr: boolean;
     searchProvider: 'auto' | 'deepseek' | 'local';
+    computerAllowedApps: string[];
   } | null>(null);
+  const [computerAppsInput, setComputerAppsInput] = useState('');
   const [localToolsBusy, setLocalToolsBusy] = useState(false);
+  const [browserHistory, setBrowserHistory] = useState<{ url: string; title: string; at: number }[]>(
+    [],
+  );
+  const [browserBusy, setBrowserBusy] = useState(false);
   const approvals: { value: RuntimeSettings['approvalPolicy']; title: string; description: string }[] = [
     { value: 'on-request', title: '按需确认', description: '只在需要越权或执行敏感操作时询问' },
     { value: 'untrusted', title: '全部确认', description: '每个命令与修改都需要你确认' },
@@ -105,9 +112,18 @@ export function SettingsPanel({
 
   useEffect(() => {
     if (tab !== 'features') return;
+    try {
+      const parsed = JSON.parse(readStorage('deepseek-codex.browserHistory') || '[]');
+      setBrowserHistory(Array.isArray(parsed) ? parsed.slice(0, 20) : []);
+    } catch {
+      setBrowserHistory([]);
+    }
     window.codex
       .localToolsStatus()
-      .then(setLocalTools)
+      .then((status) => {
+        setLocalTools(status);
+        setComputerAppsInput((status.computerAllowedApps || []).join(', '));
+      })
       .catch(() =>
         setLocalTools({
           browser: false,
@@ -115,6 +131,7 @@ export function SettingsPanel({
           search: false,
           ocr: false,
           searchProvider: 'auto',
+          computerAllowedApps: [],
         }),
       );
   }, [tab]);
@@ -125,6 +142,7 @@ export function SettingsPanel({
     search: boolean;
     ocr: boolean;
     searchProvider: 'auto' | 'deepseek' | 'local';
+    computerAllowedApps: string[];
   }>) => {
     if (!localTools || localToolsBusy) return;
     setLocalToolsBusy(true);
@@ -136,6 +154,27 @@ export function SettingsPanel({
       setSettingsNotice(friendlyClientError(error));
     } finally {
       setLocalToolsBusy(false);
+    }
+  };
+
+  const clearBrowserHistory = () => {
+    removeStorage('deepseek-codex.browserHistory');
+    setBrowserHistory([]);
+    setSettingsNotice('浏览记录已清除');
+  };
+
+  const clearBrowserData = async (kind: 'cache' | 'cookies') => {
+    if (kind === 'cookies' && !window.confirm('清除 Cookie、站点数据与登录状态？')) return;
+    setBrowserBusy(true);
+    try {
+      await window.codex.browserClearData(
+        kind === 'cache' ? { cache: true } : { cookies: true },
+      );
+      setSettingsNotice(kind === 'cache' ? '浏览器缓存已清除' : '浏览器 Cookie 与站点数据已清除');
+    } catch (error: any) {
+      setSettingsNotice(friendlyClientError(error));
+    } finally {
+      setBrowserBusy(false);
     }
   };
 
@@ -465,6 +504,35 @@ export function SettingsPanel({
 
         <div className={tab === 'features' ? 'settings-pane' : 'settings-pane hidden'}>
           <div className="setting-group">
+            <div className="setting-label">浏览器数据</div>
+            <div className="setting-note">
+              内置 Browser 使用独立会话；AI 后台搜索与读取使用另一个隔离分区。
+            </div>
+            {browserHistory.length > 0 ? (
+              <div className="browser-history-list">
+                {browserHistory.slice(0, 6).map((entry) => (
+                  <div className="browser-history-row" key={`${entry.url}-${entry.at}`}>
+                    <span>{entry.title || entry.url}</span>
+                    <small title={entry.url}>{entry.url}</small>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="cap-empty">暂无浏览记录</div>
+            )}
+            <div className="settings-inline-actions">
+              <button onClick={clearBrowserHistory} disabled={browserHistory.length === 0}>
+                清除浏览记录
+              </button>
+              <button onClick={() => void clearBrowserData('cache')} disabled={browserBusy}>
+                清除缓存
+              </button>
+              <button onClick={() => void clearBrowserData('cookies')} disabled={browserBusy}>
+                清除 Cookie 与站点数据
+              </button>
+            </div>
+          </div>
+          <div className="setting-group">
             <div className="setting-label">本地 AI 工具</div>
             <div className="setting-row">
               <div className="setting-row-text">
@@ -548,6 +616,36 @@ export function SettingsPanel({
                 <span />
               </button>
             </div>
+            {localTools?.computer ? (
+              <div className="setting-row">
+                <div className="setting-row-text">
+                  <strong>允许操作的应用</strong>
+                  <span>逗号分隔进程名；留空表示所有应用，新会话生效</span>
+                </div>
+                <input
+                  className="setting-input"
+                  value={computerAppsInput}
+                  placeholder="Code.exe, notepad.exe"
+                  spellCheck={false}
+                  onChange={(event) => setComputerAppsInput(event.target.value)}
+                  onBlur={() => {
+                    const apps = [
+                      ...new Set(
+                        computerAppsInput
+                          .split(/[,\n]/)
+                          .map((name) => name.trim())
+                          .filter(Boolean),
+                      ),
+                    ];
+                    setComputerAppsInput(apps.join(', '));
+                    void updateLocalTools({ computerAllowedApps: apps });
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') event.currentTarget.blur();
+                  }}
+                />
+              </div>
+            ) : null}
             <div className="setting-note">
               每次工具调用仍需在对话中确认；新建会话后生效。浏览器控制只作用于内置 Browser 面板；网页搜索与读取在后台完成；文档识别会上传文件到 DeepSeek OCR；电脑控制仅在本机、仅在你明确授权的任务中使用。
             </div>

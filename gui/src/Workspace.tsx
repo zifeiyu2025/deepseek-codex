@@ -27,6 +27,22 @@ import type { FileContent, FileEntry } from './types';
 import { friendlyClientError } from './lib/errors';
 import { readStorage, writeStorage } from './lib/storage';
 
+const BROWSER_HISTORY_KEY = 'deepseek-codex.browserHistory';
+
+function recordBrowserHistory(url: string, title: string) {
+  try {
+    const current = JSON.parse(readStorage(BROWSER_HISTORY_KEY) || '[]');
+    const list = Array.isArray(current) ? current : [];
+    const next = [
+      { url, title: title || url, at: Date.now() },
+      ...list.filter((entry: any) => entry?.url !== url),
+    ].slice(0, 100);
+    writeStorage(BROWSER_HISTORY_KEY, JSON.stringify(next));
+  } catch {
+    /* history is best-effort */
+  }
+}
+
 const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   ts: 'tsx',
   tsx: 'tsx',
@@ -720,6 +736,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
     if (!visited || !wrapRef.current || viewRef.current) return;
     const container = wrapRef.current;
     const view = document.createElement('webview') as any;
+    view.setAttribute('partition', 'persist:shanui-browser');
     view.setAttribute('src', url);
     view.setAttribute('allowpopups', '');
     view.className = 'browser-frame';
@@ -736,6 +753,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
           setDraft(current);
           setTitle(view.getTitle() || '');
           writeStorage('deepseek-codex.browserUrl', current);
+          recordBrowserHistory(current, view.getTitle() || '');
         }
       } catch {
         /* webview may not be ready */

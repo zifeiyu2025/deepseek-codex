@@ -7548,3 +7548,83 @@ pre::-webkit-scrollbar-button,
   color: var(--muted);
   font-size: 10.5px;
 }
+
+.browser-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.browser-history-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+
+.browser-history-row span {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.browser-history-row small {
+  overflow: hidden;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.settings-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.settings-inline-actions button {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: none;
+  color: var(--ink-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.settings-inline-actions button:hover:not(:disabled) {
+  background: #242428;
+  color: var(--ink);
+}
+
+.settings-inline-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.setting-input {
+  flex: none;
+  width: 220px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: none;
+  background: #17171a;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.setting-input:focus {
+  border-color: var(--accent);
+}

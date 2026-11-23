@@ -10,6 +10,14 @@ const enableBrowser = process.env.SHANUI_ENABLE_BROWSER === '1';
 const enableComputer = process.env.SHANUI_ENABLE_COMPUTER === '1';
 const enableWebSearch = process.env.SHANUI_ENABLE_WEB_SEARCH === '1';
 const enableOcr = process.env.SHANUI_ENABLE_OCR === '1';
+const computerAllowedApps = (() => {
+  try {
+    const parsed = JSON.parse(process.env.SHANUI_COMPUTER_ALLOWED_APPS || '[]');
+    return Array.isArray(parsed) ? parsed.filter((name) => typeof name === 'string' && name.trim()) : [];
+  } catch {
+    return [];
+  }
+})();
 
 function log(message) {
   process.stderr.write(`[shanui-local-mcp] ${message}\n`);
@@ -91,11 +99,16 @@ function runPowerShell(script, args, timeout = 30000) {
   });
 }
 
-async function computerScreenshot() {
+async function computerScreenshot(args) {
   const file = path.join(os.tmpdir(), `shanui-screen-${Date.now()}-${Math.random().toString(16).slice(2)}.png`);
+  const requested = Number(args?.screen);
+  const screenIndex = Number.isInteger(requested) ? requested : -1;
   await runPowerShell(
     `Add-Type -AssemblyName System.Windows.Forms,System.Drawing;
-$bounds=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds;
+$screens=[System.Windows.Forms.Screen]::AllScreens;
+$index=${screenIndex};
+if ($index -lt 0) { $screen=[System.Windows.Forms.Screen]::PrimaryScreen } elseif ($index -lt $screens.Count) { $screen=$screens[$index] } else { throw '屏幕索引超出范围' }
+$bounds=$screen.Bounds;
 $bitmap=New-Object System.Drawing.Bitmap $bounds.Width,$bounds.Height;
 $graphics=[System.Drawing.Graphics]::FromImage($bitmap);
 $graphics.CopyFromScreen($bounds.Location,[System.Drawing.Point]::Empty,$bounds.Size);
@@ -110,10 +123,41 @@ Write-Output $bounds.Height;`,
   return { type: 'image', mimeType: 'image/png', data: data.toString('base64') };
 }
 
+async function computerMonitors() {
+  return runPowerShell(
+    `Add-Type -AssemblyName System.Windows.Forms;
+$index=0;
+$items=@();
+foreach ($screen in [System.Windows.Forms.Screen]::AllScreens) {
+  $items += [pscustomobject]@{index=$index;device=$screen.DeviceName;primary=$screen.Primary;x=$screen.Bounds.X;y=$screen.Bounds.Y;width=$screen.Bounds.Width;height=$screen.Bounds.Height};
+  $index++;
+}
+Write-Output ($items | ConvertTo-Json -Compress)`,
+    {},
+  );
+}
+
+async function ensureComputerAppAllowed() {
+  if (!computerAllowedApps.length) return;
+  const output = await computerActiveWindow();
+  let info = null;
+  try {
+    info = JSON.parse(output);
+  } catch {
+    info = null;
+  }
+  const processName = String(info?.process || '').toLowerCase();
+  const allowed = computerAllowedApps.some((name) => String(name).toLowerCase() === processName);
+  if (!allowed) {
+    throw new Error(`当前前台应用 ${info?.process || 'unknown'} 不在允许列表：${computerAllowedApps.join(', ')}`);
+  }
+}
+
 async function computerMouse(action, args) {
   const x = Math.round(Number(args?.x));
   const y = Math.round(Number(args?.y));
   if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('坐标无效');
+  await ensureComputerAppAllowed();
   const button = ['left', 'right', 'middle'].includes(args?.button) ? args.button : 'left';
   if (action === 'move') {
     await runPowerShell(
@@ -149,6 +193,7 @@ public static class ShanuiMouseClick {
 }
 
 async function computerScroll(args) {
+  await ensureComputerAppAllowed();
   const direction = args?.direction === 'up' ? 1 : -1;
   const pages = Math.max(1, Math.min(20, Number(args?.pages) || 1));
   const delta = direction * pages * 120;
@@ -197,6 +242,7 @@ async function computerKey(args) {
   const requested = String(args?.key || '').toLowerCase().trim();
   const mapped = KEY_MAP[requested];
   if (!mapped) throw new Error(`不支持的按键：${requested}`);
+  await ensureComputerAppAllowed();
   await runPowerShell(
     `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${mapped.replace(/'/g, "''")}');`,
     {},
@@ -207,6 +253,7 @@ async function computerKey(args) {
 async function computerType(args) {
   const text = typeof args?.text === 'string' ? args.text : '';
   if (!text) throw new Error('缺少输入文本');
+  await ensureComputerAppAllowed();
   const encoded = Buffer.from(text, 'utf8').toString('base64');
   await runPowerShell(
     `Add-Type -AssemblyName System.Windows.Forms;
@@ -408,7 +455,16 @@ const ocrTools = [
 const computerTools = [
   {
     name: 'computer_screenshot',
-    description: 'Capture a PNG screenshot of the primary display.',
+    description:
+      'Capture a PNG screenshot of a display. Defaults to the primary display; use computer_monitors for indexes.',
+    inputSchema: {
+      type: 'object',
+      properties: { screen: { type: 'number', description: 'Zero-based monitor index' } },
+    },
+  },
+  {
+    name: 'computer_monitors',
+    description: 'List connected displays with index, device name, primary flag, and bounds.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -498,8 +554,11 @@ async function callTool(name, args) {
   if (name.startsWith('computer_')) {
     if (!enableComputer) throw new Error('电脑控制未启用');
     if (name === 'computer_screenshot') {
-      const image = await computerScreenshot();
+      const image = await computerScreenshot(args || {});
       return { content: [{ type: 'image', data: image.data, mimeType: image.mimeType }] };
+    }
+    if (name === 'computer_monitors') {
+      return { content: [{ type: 'text', text: await computerMonitors() }] };
     }
     if (name === 'computer_active_window') {
       return { content: [{ type: 'text', text: await computerActiveWindow() }] };

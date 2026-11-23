@@ -10,6 +10,7 @@ const {
   Tray,
   Menu,
   nativeImage,
+  session,
 } = require('electron');
 const { spawn, execFile, spawnSync } = require('node:child_process');
 const crypto = require('node:crypto');
@@ -201,7 +202,14 @@ function localMcpScriptPath() {
 }
 
 function readLocalToolsPrefs() {
-  const fallback = { browser: false, computer: false, search: false, ocr: false, searchProvider: 'auto' };
+  const fallback = {
+    browser: false,
+    computer: false,
+    search: false,
+    ocr: false,
+    searchProvider: 'auto',
+    computerAllowedApps: [],
+  };
   try {
     const saved = JSON.parse(fs.readFileSync(localToolsPrefsFile(), 'utf8'));
     const provider = ['auto', 'deepseek', 'local'].includes(saved?.searchProvider)
@@ -213,6 +221,9 @@ function readLocalToolsPrefs() {
       search: Boolean(saved?.search),
       ocr: Boolean(saved?.ocr),
       searchProvider: provider,
+      computerAllowedApps: Array.isArray(saved?.computerAllowedApps)
+        ? saved.computerAllowedApps.filter((name) => typeof name === 'string' && name.trim())
+        : [],
     };
   } catch {
     return fallback;
@@ -331,6 +342,7 @@ function localMcpServerConfig(prefs) {
       SHANUI_ENABLE_COMPUTER: prefs.computer ? '1' : '0',
       SHANUI_ENABLE_WEB_SEARCH: prefs.search ? '1' : '0',
       SHANUI_ENABLE_OCR: prefs.ocr ? '1' : '0',
+      SHANUI_COMPUTER_ALLOWED_APPS: JSON.stringify(prefs.computerAllowedApps || []),
     },
     default_tools_approval_mode: 'prompt',
     tool_timeout_sec: 120,
@@ -727,6 +739,8 @@ function attachBrowserGuest(contents) {
     }
     return { action: 'deny' };
   });
+  contents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  contents.session.setPermissionCheckHandler(() => false);
   const waiters = browserWaiters;
   browserWaiters = [];
   for (const resolve of waiters) resolve();
@@ -2009,6 +2023,21 @@ handleIpc('app:restart-engine', async () => {
   return true;
 });
 
+handleIpc('browser:clear-data', async (_event, payload) => {
+  const partitions = ['persist:shanui-browser', 'persist:shanui-web-tools'];
+  for (const partition of partitions) {
+    const target = session.fromPartition(partition);
+    if (payload?.cache) await target.clearCache();
+    if (payload?.cookies) {
+      await target.clearStorageData({
+        storages: ['cookies', 'localstorage', 'indexdb', 'websql', 'serviceworkers', 'cachestorage'],
+      });
+      await target.clearAuthCache();
+    }
+  }
+  return true;
+});
+
 handleIpc('app:get-local-tools', () => readLocalToolsPrefs());
 
 handleIpc('app:set-local-tools', async (_event, payload) => {
@@ -2020,6 +2049,11 @@ handleIpc('app:set-local-tools', async (_event, payload) => {
     searchProvider: ['auto', 'deepseek', 'local'].includes(payload?.searchProvider)
       ? payload.searchProvider
       : 'auto',
+    computerAllowedApps: Array.isArray(payload?.computerAllowedApps)
+      ? payload.computerAllowedApps
+          .filter((name) => typeof name === 'string' && name.trim())
+          .map((name) => name.trim())
+      : [],
   };
   fs.mkdirSync(path.dirname(localToolsPrefsFile()), { recursive: true });
   fs.writeFileSync(localToolsPrefsFile(), JSON.stringify(prefs));
