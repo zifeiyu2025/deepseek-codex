@@ -15,7 +15,9 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  Globe,
   Loader2,
+  Plus,
   RefreshCw,
   RotateCw,
   Search,
@@ -715,103 +717,220 @@ const BROWSER_PRESETS = [
   'http://localhost:8000',
 ];
 
+type BrowserTab = {
+  id: string;
+  url: string;
+  draft: string;
+  title: string;
+  loading: boolean;
+  canBack: boolean;
+  canForward: boolean;
+  error: string | null;
+};
+
+function browserTabLabel(tab: BrowserTab) {
+  if (tab.title) return tab.title;
+  try {
+    return new URL(tab.url).hostname || tab.url || '新标签';
+  } catch {
+    return tab.url || '新标签';
+  }
+}
+
 export function BrowserPanel({ active }: { active: boolean }) {
-  const initial = readStorage('deepseek-codex.browserUrl') || 'http://localhost:3000';
-  const [url, setUrl] = useState(initial);
-  const [draft, setDraft] = useState(initial);
-  const [urlError, setUrlError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [canBack, setCanBack] = useState(false);
-  const [canForward, setCanForward] = useState(false);
+  const initialUrl = useRef(
+    readStorage('deepseek-codex.browserUrl') || 'http://localhost:3000',
+  ).current;
+  const [tabs, setTabs] = useState<BrowserTab[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [visited, setVisited] = useState(active);
-  const [title, setTitle] = useState('');
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const viewRef = useRef<any>(null);
+  const viewsRef = useRef<Map<string, any>>(new Map());
+  const tabSeqRef = useRef(0);
+  const activeIdRef = useRef<string | null>(null);
+  const activeTab = tabs.find((tab) => tab.id === activeId) || null;
+
+  const patchTab = (id: string, patch: Partial<BrowserTab>) => {
+    setTabs((list) => list.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab)));
+  };
+
+  const activateGuest = (view: any) => {
+    try {
+      const id = view.getWebContentsId();
+      if (id) void window.codex.browserActivate(id);
+    } catch {
+      /* webview may not be ready */
+    }
+  };
+
+  const createTab = (value: string, makeActive = true) => {
+    const normalized =
+      normalizeUrl(value) || normalizeUrl(initialUrl) || 'http://localhost:3000';
+    const id = `tab-${Date.now().toString(36)}-${++tabSeqRef.current}`;
+    setVisited(true);
+    setTabs((list) => [
+      ...list,
+      {
+        id,
+        url: normalized,
+        draft: normalized,
+        title: '',
+        loading: true,
+        canBack: false,
+        canForward: false,
+        error: null,
+      },
+    ]);
+    if (makeActive) setActiveId(id);
+    return id;
+  };
+
+  const getActiveView = () => (activeId ? viewsRef.current.get(activeId) : null);
+
+  const go = (value: string) => {
+    const normalized = normalizeUrl(value);
+    if (!normalized) {
+      if (activeId) patchTab(activeId, { error: '仅支持 http/https 地址' });
+      return;
+    }
+    writeStorage('deepseek-codex.browserUrl', normalized);
+    if (!activeId) {
+      createTab(normalized);
+      return;
+    }
+    patchTab(activeId, { url: normalized, draft: normalized, error: null, loading: true });
+    const view = getActiveView();
+    if (view) {
+      view.loadURL(normalized).catch((error: Error) => patchTab(activeId, { error: error.message }));
+    }
+  };
+
+  const closeTab = (id: string) => {
+    const index = tabs.findIndex((tab) => tab.id === id);
+    const remaining = tabs.filter((tab) => tab.id !== id);
+    setTabs(remaining);
+    if (activeId === id) {
+      const next = remaining[Math.min(index, remaining.length - 1)];
+      if (next) setActiveId(next.id);
+      else {
+        setActiveId(null);
+        createTab(initialUrl);
+      }
+    }
+  };
 
   useEffect(() => {
     if (active) setVisited(true);
   }, [active]);
 
   useEffect(() => {
-    if (!visited || !wrapRef.current || viewRef.current) return;
-    const container = wrapRef.current;
-    const view = document.createElement('webview') as any;
-    view.setAttribute('partition', 'persist:shanui-browser');
-    view.setAttribute('src', url);
-    view.setAttribute('allowpopups', '');
-    view.className = 'browser-frame';
-    container.appendChild(view);
-    viewRef.current = view;
-
-    const sync = () => {
-      try {
-        setCanBack(Boolean(view.canGoBack()));
-        setCanForward(Boolean(view.canGoForward()));
-        const current = view.getURL();
-        if (current) {
-          setUrl(current);
-          setDraft(current);
-          setTitle(view.getTitle() || '');
-          writeStorage('deepseek-codex.browserUrl', current);
-          recordBrowserHistory(current, view.getTitle() || '');
-        }
-      } catch {
-        /* webview may not be ready */
-      }
-    };
-    const onStart = () => setLoading(true);
-    const onStop = () => {
-      setLoading(false);
-      sync();
-    };
-    const onNavigate = () => {
-      setUrlError(null);
-      onStop();
-    };
-    const onFail = (event: any) => {
-      if (event?.errorCode === -3) return;
-      setLoading(false);
-      setUrlError(event?.errorDescription || `加载失败（${event?.errorCode ?? 'unknown'}）`);
-    };
-    view.addEventListener('did-start-loading', onStart);
-    view.addEventListener('did-stop-loading', onStop);
-    view.addEventListener('did-navigate', onNavigate);
-    view.addEventListener('did-navigate-in-page', onNavigate);
-    view.addEventListener('page-title-updated', sync);
-    view.addEventListener('did-fail-load', onFail);
-
-    return () => {
-      view.removeEventListener('did-start-loading', onStart);
-      view.removeEventListener('did-stop-loading', onStop);
-      view.removeEventListener('did-navigate', onNavigate);
-      view.removeEventListener('did-navigate-in-page', onNavigate);
-      view.removeEventListener('page-title-updated', sync);
-      view.removeEventListener('did-fail-load', onFail);
-      try {
-        view.remove();
-      } catch {
-        /* ignore */
-      }
-      viewRef.current = null;
-    };
+    if (visited && tabs.length === 0) createTab(initialUrl);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visited]);
+  }, [visited, tabs.length]);
+
+  useEffect(() => {
+    if (!visited || !wrapRef.current) return;
+    const container = wrapRef.current;
+    for (const tab of tabs) {
+      if (viewsRef.current.has(tab.id)) continue;
+      const view = document.createElement('webview') as any;
+      view.setAttribute('partition', 'persist:shanui-browser');
+      view.setAttribute('src', tab.url);
+      view.setAttribute('allowpopups', '');
+      view.className = 'browser-frame';
+      view.style.display = 'none';
+      const sync = () => {
+        try {
+          const current = view.getURL();
+          patchTab(tab.id, {
+            canBack: Boolean(view.canGoBack()),
+            canForward: Boolean(view.canGoForward()),
+            ...(current
+              ? { url: current, draft: current, title: view.getTitle() || '' }
+              : {}),
+          });
+          if (current) {
+            writeStorage('deepseek-codex.browserUrl', current);
+            recordBrowserHistory(current, view.getTitle() || '');
+          }
+        } catch {
+          /* webview may not be ready */
+        }
+      };
+      view.addEventListener('did-start-loading', () => patchTab(tab.id, { loading: true }));
+      view.addEventListener('did-stop-loading', () => {
+        patchTab(tab.id, { loading: false });
+        sync();
+      });
+      view.addEventListener('did-navigate', () => {
+        patchTab(tab.id, { error: null, loading: false });
+        sync();
+      });
+      view.addEventListener('did-navigate-in-page', () => {
+        patchTab(tab.id, { error: null });
+        sync();
+      });
+      view.addEventListener('page-title-updated', sync);
+      view.addEventListener('did-fail-load', (event: any) => {
+        if (event?.errorCode === -3) return;
+        patchTab(tab.id, {
+          loading: false,
+          error: event?.errorDescription || `加载失败（${event?.errorCode ?? 'unknown'}）`,
+        });
+      });
+      view.addEventListener('dom-ready', () => {
+        if (activeIdRef.current === tab.id) activateGuest(view);
+      });
+      container.appendChild(view);
+      viewsRef.current.set(tab.id, view);
+    }
+    for (const [id, view] of [...viewsRef.current]) {
+      if (!tabs.some((tab) => tab.id === id)) {
+        try {
+          view.remove();
+        } catch {
+          /* ignore */
+        }
+        viewsRef.current.delete(id);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabs, visited]);
+
+  useEffect(
+    () => () => {
+      for (const view of viewsRef.current.values()) {
+        try {
+          view.remove();
+        } catch {
+          /* ignore */
+        }
+      }
+      viewsRef.current.clear();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    activeIdRef.current = activeId;
+    for (const [id, view] of viewsRef.current) {
+      view.style.display = active && id === activeId ? '' : 'none';
+    }
+    const view = activeId ? viewsRef.current.get(activeId) : null;
+    if (view) activateGuest(view);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, activeId, tabs.length]);
 
   useEffect(() => {
     const open = (event: Event) => {
       const url = (event as CustomEvent<{ url?: string }>).detail?.url;
-      if (url) go(url);
+      if (url) createTab(url);
+      else if (tabs.length === 0) createTab(initialUrl);
     };
     window.addEventListener('deepseek-codex:browser-open', open);
     return () => window.removeEventListener('deepseek-codex:browser-open', open);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    const view = viewRef.current;
-    if (!view) return;
-    view.style.display = active ? '' : 'none';
-  }, [active, visited]);
+  }, [tabs.length]);
 
   useEffect(() => {
     if (!visited) return;
@@ -819,12 +938,12 @@ export function BrowserPanel({ active }: { active: boolean }) {
     let hidden: boolean | null = null;
     const apply = () => {
       frame = 0;
-      const view = viewRef.current;
-      if (!view) return;
       const next = Boolean(document.querySelector('.key-overlay'));
       if (next === hidden) return;
       hidden = next;
-      view.style.visibility = next ? 'hidden' : 'visible';
+      for (const view of viewsRef.current.values()) {
+        view.style.visibility = next ? 'hidden' : 'visible';
+      }
     };
     const schedule = () => {
       if (!frame) frame = window.requestAnimationFrame(apply);
@@ -838,43 +957,60 @@ export function BrowserPanel({ active }: { active: boolean }) {
       observer.disconnect();
       if (frame) window.cancelAnimationFrame(frame);
     };
-  }, [visited]);
+  }, [visited, tabs.length]);
 
-  const go = (value: string) => {
-    const normalized = normalizeUrl(value);
-    if (!normalized) {
-      setUrlError('仅支持 http/https 地址');
-      return;
-    }
-    setUrlError(null);
-    setUrl(normalized);
-    setDraft(normalized);
-    setVisited(true);
-    writeStorage('deepseek-codex.browserUrl', normalized);
-    const view = viewRef.current;
-    if (view) {
-      view.loadURL(normalized).catch((error: Error) => setUrlError(error.message));
-    } else {
-      window.setTimeout(() => {
-        viewRef.current?.loadURL?.(normalized).catch((error: Error) => setUrlError(error.message));
-      }, 80);
-    }
-  };
+  const view = getActiveView();
 
   return (
     <div className="browser-panel">
+      <div className="browser-tabs">
+        {tabs.map((tab) => (
+          <div
+            key={tab.id}
+            className={`browser-tab ${tab.id === activeId ? 'active' : ''}`}
+            onClick={() => setActiveId(tab.id)}
+            title={tab.url}
+          >
+            {tab.loading ? (
+              <Loader2 size={10} className="spin" />
+            ) : (
+              <Globe size={10} />
+            )}
+            <span>{browserTabLabel(tab)}</span>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                closeTab(tab.id);
+              }}
+              aria-label="关闭标签"
+            >
+              <X size={9} />
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="browser-tab-new"
+          onClick={() => createTab(activeTab?.url || initialUrl)}
+          title="新建标签"
+          aria-label="新建标签"
+        >
+          <Plus size={12} />
+        </button>
+      </div>
       <form
         className="browser-bar"
         onSubmit={(event) => {
           event.preventDefault();
-          go(draft);
+          go(activeTab?.draft ?? '');
         }}
       >
         <button
           className="rail-icon-btn"
           type="button"
-          disabled={!canBack}
-          onClick={() => viewRef.current?.goBack()}
+          disabled={!activeTab?.canBack}
+          onClick={() => view?.goBack()}
           title="后退"
         >
           <ArrowLeft size={13} />
@@ -882,17 +1018,17 @@ export function BrowserPanel({ active }: { active: boolean }) {
         <button
           className="rail-icon-btn"
           type="button"
-          disabled={!canForward}
-          onClick={() => viewRef.current?.goForward()}
+          disabled={!activeTab?.canForward}
+          onClick={() => view?.goForward()}
           title="前进"
         >
           <ArrowRight size={13} />
         </button>
-        {loading ? (
+        {activeTab?.loading ? (
           <button
             className="rail-icon-btn"
             type="button"
-            onClick={() => viewRef.current?.stop()}
+            onClick={() => view?.stop()}
             title="停止加载"
           >
             <X size={13} />
@@ -901,15 +1037,17 @@ export function BrowserPanel({ active }: { active: boolean }) {
           <button
             className="rail-icon-btn"
             type="button"
-            onClick={() => viewRef.current?.reload()}
+            onClick={() => view?.reload()}
             title="刷新"
           >
             <RotateCw size={13} />
           </button>
         )}
         <input
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          value={activeTab?.draft ?? ''}
+          onChange={(event) => {
+            if (activeId) patchTab(activeId, { draft: event.target.value });
+          }}
           placeholder="http://localhost:3000"
           spellCheck={false}
         />
@@ -919,7 +1057,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
         <button
           className="rail-icon-btn"
           type="button"
-          onClick={() => window.codex.openExternal(url)}
+          onClick={() => activeTab?.url && window.codex.openExternal(activeTab.url)}
           title="在外部浏览器打开"
         >
           <ExternalLink size={13} />
@@ -931,19 +1069,21 @@ export function BrowserPanel({ active }: { active: boolean }) {
             :{new URL(preset).port}
           </button>
         ))}
-        {loading ? (
+        {activeTab?.loading ? (
           <span className="browser-loading">
             <Loader2 size={11} className="spin" /> 加载中
           </span>
-        ) : title ? (
-          <span className="browser-title" title={url}>
-            {title}
+        ) : activeTab?.title ? (
+          <span className="browser-title" title={activeTab.url}>
+            {activeTab.title}
           </span>
         ) : null}
       </div>
-      {urlError ? <div className="browser-error">{urlError}</div> : null}
+      {activeTab?.error ? <div className="browser-error">{activeTab.error}</div> : null}
       <div className="browser-stage" ref={wrapRef}>
-        {!visited ? <div className="files-empty">输入本地开发服务器地址，预览页面。</div> : null}
+        {!visited || tabs.length === 0 ? (
+          <div className="files-empty">输入本地开发服务器地址，预览页面。</div>
+        ) : null}
       </div>
     </div>
   );

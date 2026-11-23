@@ -7628,3 +7628,75 @@ pre::-webkit-scrollbar-button,
 .setting-input:focus {
   border-color: var(--accent);
 }
+
+.browser-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.browser-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 190px;
+  padding: 4px 5px 4px 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.browser-tab:hover {
+  background: #1c1c1f;
+  color: var(--ink);
+}
+
+.browser-tab.active {
+  border-color: var(--line);
+  background: #242428;
+  color: var(--ink);
+}
+
+.browser-tab span {
+  overflow: hidden;
+  max-width: 140px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.browser-tab > button {
+  display: grid;
+  place-items: center;
+  padding: 1px;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.browser-tab > button:hover {
+  color: var(--ink);
+}
+
+.browser-tab-new {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.browser-tab-new:hover {
+  background: #242428;
+  color: var(--ink);
+}

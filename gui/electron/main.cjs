@@ -11,6 +11,7 @@ const {
   Menu,
   nativeImage,
   session,
+  webContents,
 } = require('electron');
 const { spawn, execFile, spawnSync } = require('node:child_process');
 const crypto = require('node:crypto');
@@ -2035,6 +2036,15 @@ handleIpc('browser:clear-data', async (_event, payload) => {
       await target.clearAuthCache();
     }
   }
+  return true;
+});
+
+handleIpc('browser:activate', (_event, webContentsId) => {
+  const id = Number(webContentsId);
+  if (!Number.isInteger(id)) return false;
+  const guest = webContents.fromId(id);
+  if (!guest || guest.isDestroyed()) return false;
+  browserGuest = guest;
   return true;
 });
 

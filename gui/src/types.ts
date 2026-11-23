@@ -326,6 +326,7 @@ declare global {
         cache?: boolean;
         cookies?: boolean;
       }): Promise<boolean>;
+      browserActivate(webContentsId: number): Promise<boolean>;
       gitInfo(targetPath: string): Promise<{
         repo: boolean;
         root?: string;
