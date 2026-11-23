@@ -388,6 +388,15 @@ function getJson(url) {
   );
   await sleep(150);
 
+  await setComposer('/project');
+  await pressComposer('Enter');
+  await sleep(200);
+  check('斜杠命令打开项目选择', await evaluate("Boolean(document.querySelector('#project-picker-title'))"));
+  await evaluate(
+    "[...document.querySelectorAll('.key-card .key-actions button')].find(b=>b.textContent.trim()==='取消')?.click(); true",
+  );
+  await sleep(150);
+
   socket.close();
   if (failures.length > 0) {
     console.error(`\nSMOKE_FAILED ${failures.length} 项`);

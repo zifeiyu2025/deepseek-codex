@@ -151,7 +151,12 @@ export type SlashCommandId =
   | 'rename'
   | 'mcp'
   | 'init'
-  | 'status';
+  | 'status'
+  | 'chat'
+  | 'delete'
+  | 'pin'
+  | 'project'
+  | 'plan-skill';
 
 export type UserInputOption = {
   label: string;

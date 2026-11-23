@@ -183,6 +183,7 @@ export default function App() {
     }
   });
   const [projectMenuId, setProjectMenuId] = useState<string | null>(null);
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [projectRenameTarget, setProjectRenameTarget] = useState<ProjectInfo | null>(null);
   const [projectRenameInput, setProjectRenameInput] = useState('');
   const [mode, setMode] = useState<'default' | 'plan'>(() => {
@@ -2391,6 +2392,29 @@ export default function App() {
     [pinnedSectionId, refreshThreads],
   );
 
+  const pinThreadToSidebar = useCallback(
+    async (thread: ThreadSummary) => {
+      try {
+        let sectionId = pinnedSectionId;
+        if (!sectionId) {
+          const created = await window.codex.request('threadSection/create', { name: 'Pinned' });
+          sectionId = created?.section?.id || null;
+          if (!sectionId) throw new Error('创建置顶分区失败');
+          await refreshSections();
+        }
+        await window.codex.request('thread/section/move', {
+          threadId: thread.id,
+          sectionId,
+        });
+        refreshThreads();
+        setNotice('已置顶会话');
+      } catch (pinError: any) {
+        setError(friendlyClientError(pinError));
+      }
+    },
+    [pinnedSectionId, refreshSections, refreshThreads],
+  );
+
   const markThreadUnread = useCallback(async (thread: ThreadSummary) => {
     const state = readStatesRef.current[thread.id];
     if (!state?.revision) return;
@@ -2786,6 +2810,17 @@ export default function App() {
         case 'new':
           newSession();
           break;
+        case 'chat':
+          if (projectIdRef.current) selectProject(null);
+          else newSession();
+          break;
+        case 'project':
+          setProjectPickerOpen(true);
+          break;
+        case 'plan-skill':
+          if (modeRef.current !== 'plan') togglePlanMode();
+          setNotice('已启用计划模式');
+          break;
         case 'model':
         case 'reasoning':
           setModelMenuOpen(true);
@@ -2815,6 +2850,14 @@ export default function App() {
             setError('当前会话尚未就绪，暂时不能重命名');
           }
           break;
+        case 'pin':
+          if (activeThread) void pinThreadToSidebar(activeThread);
+          else setError('当前会话尚未就绪，暂时不能置顶');
+          break;
+        case 'delete':
+          if (activeThread) void deleteThread(activeThread);
+          else setError('当前会话尚未就绪，暂时不能删除');
+          break;
         case 'init':
           if (modeRef.current === 'plan') {
             modeRef.current = 'default';
@@ -2838,6 +2881,7 @@ export default function App() {
     [
       archiveThread,
       compactThread,
+      deleteThread,
       forkThread,
       goal,
       mode,
@@ -2845,6 +2889,8 @@ export default function App() {
       newSession,
       openCapabilities,
       openGoalDialog,
+      pinThreadToSidebar,
+      selectProject,
       send,
       threads,
       togglePlanMode,
@@ -4353,6 +4399,55 @@ export default function App() {
               >
                 保存
               </button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {projectPickerOpen ? (
+        <Modal onClose={() => setProjectPickerOpen(false)} labelledBy="project-picker-title">
+          <div className="key-card">
+            <div className="key-kicker">PROJECT</div>
+            <h2 id="project-picker-title">选择项目</h2>
+            <p>之后的新会话会在所选项目中创建。</p>
+            <div className="project-picker-list">
+              <button
+                className={!projectId ? 'active' : ''}
+                onClick={() => {
+                  selectProject(null);
+                  setProjectPickerOpen(false);
+                }}
+              >
+                <FolderOpen size={13} />
+                <span>无项目</span>
+                {!projectId ? <Check size={12} /> : null}
+              </button>
+              {projects.map((project) => (
+                <button
+                  key={project.id}
+                  className={projectId === project.id ? 'active' : ''}
+                  onClick={() => {
+                    selectProject(project);
+                    setProjectPickerOpen(false);
+                  }}
+                >
+                  <FolderOpen size={13} />
+                  <span>{project.name}</span>
+                  <small>{project.roots?.[0]?.path || ''}</small>
+                  {projectId === project.id ? <Check size={12} /> : null}
+                </button>
+              ))}
+            </div>
+            <div className="key-actions">
+              <button
+                onClick={() => {
+                  setProjectPickerOpen(false);
+                  void addProject();
+                }}
+              >
+                添加项目
+              </button>
+              <button onClick={() => setProjectPickerOpen(false)}>取消</button>
             </div>
           </div>
         </Modal>

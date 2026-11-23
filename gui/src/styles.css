@@ -7494,3 +7494,43 @@ pre::-webkit-scrollbar-button,
   color: var(--faint);
   font-size: 10.5px;
 }
+
+.project-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 300px;
+  margin: 10px 0;
+  overflow-y: auto;
+}
+
+.project-picker-list button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink-dim);
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-picker-list button:hover,
+.project-picker-list button.active {
+  border-color: var(--line);
+  background: #242428;
+  color: var(--ink);
+}
+
+.project-picker-list small {
+  max-width: 45%;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
