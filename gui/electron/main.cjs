@@ -625,6 +625,44 @@ async function ensureBrowserGuest() {
   return browserGuest;
 }
 
+async function guestInput(guest, method, params) {
+  if (!guest.debugger.isAttached()) guest.debugger.attach('1.3');
+  return guest.debugger.sendCommand(method, params);
+}
+
+async function prepareGuestInput(guest) {
+  await guestInput(guest, 'Page.bringToFront');
+  await guestInput(guest, 'Emulation.setFocusEmulationEnabled', { enabled: true });
+}
+
+const GUEST_KEYS = {
+  enter: { key: 'Enter', code: 'Enter', vk: 13, text: '\r' },
+  tab: { key: 'Tab', code: 'Tab', vk: 9 },
+  escape: { key: 'Escape', code: 'Escape', vk: 27 },
+  backspace: { key: 'Backspace', code: 'Backspace', vk: 8 },
+  arrowup: { key: 'ArrowUp', code: 'ArrowUp', vk: 38 },
+  arrowdown: { key: 'ArrowDown', code: 'ArrowDown', vk: 40 },
+  arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft', vk: 37 },
+  arrowright: { key: 'ArrowRight', code: 'ArrowRight', vk: 39 },
+};
+
+async function guestPressKey(guest, key) {
+  const spec = GUEST_KEYS[key];
+  if (!spec) throw new Error('不支持的按键');
+  const base = {
+    key: spec.key,
+    code: spec.code,
+    windowsVirtualKeyCode: spec.vk,
+    nativeVirtualKeyCode: spec.vk,
+  };
+  await guestInput(guest, 'Input.dispatchKeyEvent', {
+    type: spec.text ? 'keyDown' : 'rawKeyDown',
+    ...base,
+    ...(spec.text ? { text: spec.text, unmodifiedText: spec.text } : {}),
+  });
+  await guestInput(guest, 'Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+}
+
 async function handleBrowserTool(tool, args) {
   const guest = await ensureBrowserGuest();
   if (tool === 'browser_navigate') {
@@ -644,16 +682,27 @@ async function handleBrowserTool(tool, args) {
   if (tool === 'browser_snapshot') {
     const data = await guest.executeJavaScript(
       `(() => {
+        document.querySelectorAll('[data-shanui-ref]').forEach((el) => el.removeAttribute('data-shanui-ref'));
         const text = (document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
-        const elements = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[contenteditable="true"]')]
-          .slice(0, 100)
-          .map((el, index) => ({
-            index,
+        const candidates = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"],[role="checkbox"],[role="tab"],[contenteditable="true"]')];
+        const elements = [];
+        for (const el of candidates) {
+          if (elements.length >= 120) break;
+          const rect = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          if (rect.width <= 0 || rect.height <= 0 || style.visibility === 'hidden' || style.display === 'none') continue;
+          if (rect.bottom < 0 || rect.top > innerHeight * 2) continue;
+          const ref = 'e' + (elements.length + 1);
+          el.setAttribute('data-shanui-ref', ref);
+          elements.push({
+            ref,
             tag: el.tagName.toLowerCase(),
             type: el.getAttribute('type') || null,
-            text: ((el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.name || '') + '').trim().slice(0, 120),
-            selector: el.id ? '#' + CSS.escape(el.id) : null,
-          }));
+            role: el.getAttribute('role') || null,
+            text: ((el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.name || '') + '').replace(/\\s+/g, ' ').trim().slice(0, 120),
+            bbox: { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), w: Math.round(rect.width), h: Math.round(rect.height) },
+          });
+        }
         return { title: document.title, url: location.href, text: text.slice(0, 12000), elements };
       })()`,
       true,
@@ -662,59 +711,84 @@ async function handleBrowserTool(tool, args) {
   }
   if (tool === 'browser_click') {
     const spec = JSON.stringify({
+      ref: typeof args?.ref === 'string' ? args.ref : null,
       selector: typeof args?.selector === 'string' ? args.selector : null,
       text: typeof args?.text === 'string' ? args.text : null,
+      x: Number.isFinite(Number(args?.x)) ? Number(args.x) : null,
+      y: Number.isFinite(Number(args?.y)) ? Number(args.y) : null,
     });
-    const result = await guest.executeJavaScript(
+    const target = await guest.executeJavaScript(
       `(() => {
         const spec = ${spec};
-        const candidates = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[contenteditable="true"]')];
-        let el = spec.selector ? document.querySelector(spec.selector) : null;
+        if (spec.x !== null && spec.y !== null) return { x: spec.x, y: spec.y, text: '坐标点击' };
+        const candidates = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"],[role="checkbox"],[role="tab"],[contenteditable="true"]')];
+        let el = null;
+        if (spec.ref) el = document.querySelector('[data-shanui-ref="' + CSS.escape(spec.ref) + '"]');
+        if (!el && spec.selector) el = document.querySelector(spec.selector);
         if (!el && spec.text) {
           const wanted = spec.text.trim();
           el = candidates.find((entry) => ((entry.innerText || entry.value || entry.getAttribute('aria-label') || '') + '').trim() === wanted)
             || candidates.find((entry) => ((entry.innerText || entry.value || entry.getAttribute('aria-label') || '') + '').includes(wanted));
         }
         if (!el) throw new Error('未找到目标元素');
-        el.scrollIntoView({ block: 'center' });
-        el.click();
-        return { tag: el.tagName.toLowerCase(), text: ((el.innerText || el.value || el.getAttribute('aria-label') || '') + '').trim().slice(0, 120) };
+        el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+        const rect = el.getBoundingClientRect();
+        return {
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+          text: ((el.innerText || el.value || el.getAttribute('aria-label') || '') + '').replace(/\\s+/g, ' ').trim().slice(0, 120),
+        };
       })()`,
       true,
     );
-    return { type: 'text', text: `已点击 ${JSON.stringify(result)}` };
+    await prepareGuestInput(guest);
+    await guestInput(guest, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y });
+    await guestInput(guest, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: target.x, y: target.y, button: 'left', buttons: 1, clickCount: 1 });
+    await guestInput(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: target.x, y: target.y, button: 'left', buttons: 0, clickCount: 1 });
+    return { type: 'text', text: `已点击 ${JSON.stringify({ text: target.text, x: target.x, y: target.y })}` };
   }
   if (tool === 'browser_type') {
+    const nextText = typeof args?.text === 'string' ? args.text : '';
     const spec = JSON.stringify({
+      ref: typeof args?.ref === 'string' ? args.ref : null,
       selector: typeof args?.selector === 'string' ? args.selector : null,
-      text: typeof args?.text === 'string' ? args.text : '',
+      text: nextText,
+      clear: args?.clear !== false,
       submit: Boolean(args?.submit),
     });
     await guest.executeJavaScript(
       `(() => {
         const spec = ${spec};
-        let el = spec.selector ? document.querySelector(spec.selector) : null;
-        if (!el && document.activeElement instanceof HTMLElement) el = document.activeElement;
+        let el = null;
+        if (spec.ref) el = document.querySelector('[data-shanui-ref="' + CSS.escape(spec.ref) + '"]');
+        if (!el && spec.selector) el = document.querySelector(spec.selector);
+        if (!el && document.activeElement instanceof HTMLElement && document.activeElement !== document.body) el = document.activeElement;
         if (!el) throw new Error('未找到输入元素');
+        el.scrollIntoView({ block: 'center', behavior: 'instant' });
         el.focus();
-        if (el.isContentEditable) {
-          el.textContent = spec.text;
-        } else {
+        if (spec.clear && !el.isContentEditable) {
           const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
           const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-          if (setter) setter.call(el, spec.text); else el.value = spec.text;
-        }
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        if (spec.submit) {
-          if (el.form?.requestSubmit) el.form.requestSubmit();
-          else el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+          if (setter) setter.call(el, ''); else el.value = '';
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        } else if (spec.clear && el.isContentEditable) {
+          el.textContent = '';
         }
         return true;
       })()`,
       true,
     );
-    return { type: 'text', text: `已输入 ${args?.text?.length || 0} 个字符` };
+    await prepareGuestInput(guest);
+    guest.focus?.();
+    await guest.insertText(nextText);
+    if (args?.submit) await guestPressKey(guest, 'enter');
+    return { type: 'text', text: `已输入 ${nextText.length} 个字符` };
+  }
+  if (tool === 'browser_press_key') {
+    const key = typeof args?.key === 'string' ? args.key.toLowerCase() : '';
+    await prepareGuestInput(guest);
+    await guestPressKey(guest, key);
+    return { type: 'text', text: `已按下 ${GUEST_KEYS[key].key}` };
   }
   if (tool === 'browser_scroll') {
     const direction = args?.direction === 'up' ? -1 : 1;

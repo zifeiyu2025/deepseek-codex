@@ -262,12 +262,16 @@ const browserTools = [
   },
   {
     name: 'browser_click',
-    description: 'Click an element in the in-app browser by CSS selector or exact visible text.',
+    description:
+      'Click an element in the in-app browser by snapshot ref, CSS selector, exact visible text, or viewport coordinates.',
     inputSchema: {
       type: 'object',
       properties: {
+        ref: { type: 'string', description: 'Element ref from browser_snapshot, such as e3' },
         selector: { type: 'string' },
         text: { type: 'string' },
+        x: { type: 'number' },
+        y: { type: 'number' },
       },
     },
   },
@@ -277,11 +281,27 @@ const browserTools = [
     inputSchema: {
       type: 'object',
       properties: {
+        ref: { type: 'string', description: 'Input ref from browser_snapshot, such as e4' },
         selector: { type: 'string' },
         text: { type: 'string' },
+        clear: { type: 'boolean', description: 'Replace existing content; defaults to true' },
         submit: { type: 'boolean' },
       },
       required: ['text'],
+    },
+  },
+  {
+    name: 'browser_press_key',
+    description: 'Press a navigation or editing key in the in-app browser.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: {
+          type: 'string',
+          enum: ['enter', 'tab', 'escape', 'backspace', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'],
+        },
+      },
+      required: ['key'],
     },
   },
   {
