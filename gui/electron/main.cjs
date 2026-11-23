@@ -110,6 +110,8 @@ const COMPUTER_TOOL_NAMES = [
   'computer_focus_app',
   'computer_move',
   'computer_click',
+  'computer_set_value',
+  'computer_element_action',
   'computer_type',
   'computer_key',
   'computer_scroll',

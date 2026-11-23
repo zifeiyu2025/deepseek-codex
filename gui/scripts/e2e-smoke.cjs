@@ -269,7 +269,9 @@ function getJson(url) {
         const names=Object.keys(server?.tools||{});
         return JSON.stringify({
           listWindows:names.includes('computer_list_windows'),
-          windowState:names.includes('computer_window_state')
+          windowState:names.includes('computer_window_state'),
+          setValue:names.includes('computer_set_value'),
+          elementAction:names.includes('computer_element_action')
         });
       } finally {
         await window.codex.setLocalTools(before);
@@ -278,7 +280,10 @@ function getJson(url) {
   );
   check(
     '电脑窗口上下文工具',
-    computerTools.listWindows && computerTools.windowState,
+    computerTools.listWindows &&
+      computerTools.windowState &&
+      computerTools.setValue &&
+      computerTools.elementAction,
     JSON.stringify(computerTools),
   );
   await evaluate("document.querySelector('.settings-back')?.click(); true");
