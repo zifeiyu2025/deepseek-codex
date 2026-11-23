@@ -9,6 +9,7 @@ import {
 import {
   ArrowLeft,
   ArrowRight,
+  Camera,
   ChevronDown,
   ChevronRight,
   ExternalLink,
@@ -819,6 +820,32 @@ export function BrowserPanel({ active }: { active: boolean }) {
     }
   };
 
+  const capturePage = async () => {
+    const view = getActiveView();
+    if (!view) return;
+    try {
+      let image = null;
+      let lastError = null;
+      for (let attempt = 0; attempt < 3 && !image; attempt += 1) {
+        try {
+          image = await view.capturePage();
+        } catch (error: any) {
+          lastError = error;
+          await new Promise((resolve) => setTimeout(resolve, 600));
+        }
+      }
+      if (!image) throw lastError || new Error('页面截图为空');
+      const path = await window.codex.browserSavePageShot(image.toDataURL());
+      if (path) {
+        window.dispatchEvent(
+          new CustomEvent('deepseek-codex:attach-image', { detail: { path } }),
+        );
+      }
+    } catch (error: any) {
+      if (activeId) patchTab(activeId, { error: friendlyClientError(error) });
+    }
+  };
+
   useEffect(() => {
     if (active) setVisited(true);
   }, [active]);
@@ -1053,6 +1080,14 @@ export function BrowserPanel({ active }: { active: boolean }) {
         />
         <button className="rail-text-btn" type="submit">
           打开
+        </button>
+        <button
+          className="rail-icon-btn"
+          type="button"
+          onClick={() => void capturePage()}
+          title="截取页面并附加到输入框"
+        >
+          <Camera size={13} />
         </button>
         <button
           className="rail-icon-btn"

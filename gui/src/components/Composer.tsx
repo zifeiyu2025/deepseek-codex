@@ -26,6 +26,7 @@ import {
   ListChecks,
   Loader2,
   Minimize2,
+  Monitor,
   Pencil,
   PanelRight,
   Paperclip,
@@ -55,6 +56,7 @@ export function Composer({
   attachMenuOpen,
   attachments,
   autonomyHidden,
+  captureScreen,
   dragging,
   effortOptions,
   goal,
@@ -109,6 +111,7 @@ export function Composer({
   attachMenuOpen: boolean;
   attachments: string[];
   autonomyHidden: boolean;
+  captureScreen: () => void;
   dragging: boolean;
   effortOptions: string[];
   goal: ThreadGoal | null;
@@ -651,6 +654,14 @@ export function Composer({
                         }}
                       >
                         <ImageIcon size={13} /> 添加图片
+                      </button>
+                      <button
+                        onClick={() => {
+                          setAttachMenuOpen(false);
+                          captureScreen();
+                        }}
+                      >
+                        <Monitor size={13} /> 截取屏幕
                       </button>
                       <div className="menu-divider" />
                       <button

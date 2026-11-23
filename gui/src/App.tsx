@@ -1997,6 +1997,29 @@ export default function App() {
     setAttachments((previous) => [...new Set([...previous, ...paths])]);
   }, []);
 
+  const captureScreen = useCallback(async () => {
+    try {
+      const path = await window.codex.captureScreen();
+      if (path) {
+        setAttachments((previous) => [...new Set([...previous, path])]);
+        setNotice('已附加屏幕截图');
+      }
+    } catch (error: any) {
+      setError(friendlyClientError(error));
+    }
+  }, []);
+
+  useEffect(() => {
+    const attach = (event: Event) => {
+      const path = (event as CustomEvent<{ path?: string }>).detail?.path;
+      if (!path) return;
+      setAttachments((previous) => [...new Set([...previous, path])]);
+      setNotice('已附加页面截图');
+    };
+    window.addEventListener('deepseek-codex:attach-image', attach);
+    return () => window.removeEventListener('deepseek-codex:attach-image', attach);
+  }, []);
+
   const toggleWorktree = useCallback(() => {
     setWorktreeMode((previous) => {
       const next = !previous;
@@ -3519,6 +3542,7 @@ export default function App() {
           autonomyHidden={autonomyHidden}
           goal={goal}
           hasThread={Boolean(threadId)}
+          captureScreen={captureScreen}
           dragging={dragging}
           effortOptions={effortOptions}
           input={input}

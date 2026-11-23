@@ -210,12 +210,16 @@ function readLocalToolsPrefs() {
     ocr: false,
     searchProvider: 'auto',
     computerAllowedApps: [],
+    browserOriginPolicy: 'any',
+    browserAllowedOrigins: [],
   };
   try {
     const saved = JSON.parse(fs.readFileSync(localToolsPrefsFile(), 'utf8'));
     const provider = ['auto', 'deepseek', 'local'].includes(saved?.searchProvider)
       ? saved.searchProvider
       : 'auto';
+    const originPolicy =
+      saved?.browserOriginPolicy === 'allowlist' ? 'allowlist' : 'any';
     return {
       browser: Boolean(saved?.browser),
       computer: Boolean(saved?.computer),
@@ -224,6 +228,10 @@ function readLocalToolsPrefs() {
       searchProvider: provider,
       computerAllowedApps: Array.isArray(saved?.computerAllowedApps)
         ? saved.computerAllowedApps.filter((name) => typeof name === 'string' && name.trim())
+        : [],
+      browserOriginPolicy: originPolicy,
+      browserAllowedOrigins: Array.isArray(saved?.browserAllowedOrigins)
+        ? saved.browserAllowedOrigins.filter((origin) => typeof origin === 'string' && origin.trim())
         : [],
     };
   } catch {
@@ -807,6 +815,7 @@ async function guestPressKey(guest, key) {
 
 async function navigateBrowserGuest(guest, raw) {
   const url = parseHttpUrl(raw);
+  assertBrowserOrigin(url);
   await guest.loadURL(url);
   return url;
 }
@@ -822,6 +831,49 @@ function parseHttpUrl(raw) {
     throw new Error('仅允许 http/https 地址');
   }
   return parsed.toString();
+}
+
+function browserOriginAllowed(rawUrl) {
+  const prefs = readLocalToolsPrefs();
+  if (prefs.browserOriginPolicy !== 'allowlist') return true;
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  const host = parsed.host.toLowerCase();
+  const hostname = parsed.hostname.toLowerCase();
+  return prefs.browserAllowedOrigins.some((entry) => {
+    const value = String(entry).trim().toLowerCase();
+    if (!value) return false;
+    if (value.startsWith('*.')) {
+      const suffix = value.slice(2);
+      return hostname === suffix || hostname.endsWith(`.${suffix}`);
+    }
+    return host === value || hostname === value;
+  });
+}
+
+function assertBrowserOrigin(rawUrl) {
+  if (browserOriginAllowed(rawUrl)) return;
+  let host = rawUrl;
+  try {
+    host = new URL(rawUrl).host;
+  } catch {
+    /* keep raw */
+  }
+  throw new Error(`站点不在允许列表：${host}`);
+}
+
+function assertCurrentBrowserOrigin(guest) {
+  let current = '';
+  try {
+    current = guest.getURL() || '';
+  } catch {
+    return;
+  }
+  if (/^https?:/i.test(current)) assertBrowserOrigin(current);
 }
 
 let webWorker = null;
@@ -1084,6 +1136,9 @@ async function handleBrowserTool(tool, args) {
     return { type: 'text', text: JSON.stringify(result, null, 2) };
   }
   const guest = await ensureBrowserGuest();
+  if (tool !== 'open_browser' && tool !== 'browser_navigate') {
+    assertCurrentBrowserOrigin(guest);
+  }
   if (tool === 'open_browser') {
     const raw = typeof args?.url === 'string' ? args.url.trim() : '';
     if (!raw) {
@@ -2024,6 +2079,48 @@ handleIpc('app:restart-engine', async () => {
   return true;
 });
 
+handleIpc('app:capture-screen', async () => {
+  const file = path.join(
+    attachmentsDir,
+    `screen-${Date.now()}-${Math.random().toString(16).slice(2)}.png`,
+  );
+  const script = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing;
+$bounds=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds;
+$bitmap=New-Object System.Drawing.Bitmap $bounds.Width,$bounds.Height;
+$graphics=[System.Drawing.Graphics]::FromImage($bitmap);
+$graphics.CopyFromScreen($bounds.Location,[System.Drawing.Point]::Empty,$bounds.Size);
+$bitmap.Save('${file.replace(/'/g, "''")}',[System.Drawing.Imaging.ImageFormat]::Png);
+$graphics.Dispose(); $bitmap.Dispose();`;
+  await new Promise((resolve, reject) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-STA', '-Command', script],
+      { windowsHide: true, timeout: 20000 },
+      (error, _stdout, stderr) => {
+        if (error) reject(new Error((stderr || error.message || '截屏失败').trim()));
+        else resolve();
+      },
+    );
+  });
+  addAllowedRoot(path.dirname(file));
+  return file;
+});
+
+handleIpc('browser:save-page-shot', async (_event, dataUrl) => {
+  if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,')) {
+    throw new Error('页面截图数据无效');
+  }
+  const buffer = Buffer.from(dataUrl.slice('data:image/png;base64,'.length), 'base64');
+  if (!buffer.length || buffer.length > 25 * 1024 * 1024) throw new Error('页面截图大小无效');
+  const file = path.join(
+    attachmentsDir,
+    `page-${Date.now()}-${Math.random().toString(16).slice(2)}.png`,
+  );
+  await fs.promises.writeFile(file, buffer);
+  addAllowedRoot(path.dirname(file));
+  return file;
+});
+
 handleIpc('browser:clear-data', async (_event, payload) => {
   const partitions = ['persist:shanui-browser', 'persist:shanui-web-tools'];
   for (const partition of partitions) {
@@ -2063,6 +2160,12 @@ handleIpc('app:set-local-tools', async (_event, payload) => {
       ? payload.computerAllowedApps
           .filter((name) => typeof name === 'string' && name.trim())
           .map((name) => name.trim())
+      : [],
+    browserOriginPolicy: payload?.browserOriginPolicy === 'allowlist' ? 'allowlist' : 'any',
+    browserAllowedOrigins: Array.isArray(payload?.browserAllowedOrigins)
+      ? payload.browserAllowedOrigins
+          .filter((origin) => typeof origin === 'string' && origin.trim())
+          .map((origin) => origin.trim())
       : [],
   };
   fs.mkdirSync(path.dirname(localToolsPrefsFile()), { recursive: true });

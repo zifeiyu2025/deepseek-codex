@@ -294,6 +294,8 @@ declare global {
         ocr: boolean;
         searchProvider: 'auto' | 'deepseek' | 'local';
         computerAllowedApps: string[];
+        browserOriginPolicy: 'any' | 'allowlist';
+        browserAllowedOrigins: string[];
       }>;
       setLocalTools(prefs: {
         browser: boolean;
@@ -302,6 +304,8 @@ declare global {
         ocr: boolean;
         searchProvider: 'auto' | 'deepseek' | 'local';
         computerAllowedApps: string[];
+        browserOriginPolicy: 'any' | 'allowlist';
+        browserAllowedOrigins: string[];
       }): Promise<{
         browser: boolean;
         computer: boolean;
@@ -309,6 +313,8 @@ declare global {
         ocr: boolean;
         searchProvider: 'auto' | 'deepseek' | 'local';
         computerAllowedApps: string[];
+        browserOriginPolicy: 'any' | 'allowlist';
+        browserAllowedOrigins: string[];
       }>;
       ocrFile(payload: {
         path: string;
@@ -327,6 +333,8 @@ declare global {
         cookies?: boolean;
       }): Promise<boolean>;
       browserActivate(webContentsId: number): Promise<boolean>;
+      captureScreen(): Promise<string>;
+      browserSavePageShot(dataUrl: string): Promise<string>;
       gitInfo(targetPath: string): Promise<{
         repo: boolean;
         root?: string;

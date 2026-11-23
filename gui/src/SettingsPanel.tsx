@@ -66,8 +66,11 @@ export function SettingsPanel({
     ocr: boolean;
     searchProvider: 'auto' | 'deepseek' | 'local';
     computerAllowedApps: string[];
+    browserOriginPolicy: 'any' | 'allowlist';
+    browserAllowedOrigins: string[];
   } | null>(null);
   const [computerAppsInput, setComputerAppsInput] = useState('');
+  const [browserOriginsInput, setBrowserOriginsInput] = useState('');
   const [localToolsBusy, setLocalToolsBusy] = useState(false);
   const [browserHistory, setBrowserHistory] = useState<{ url: string; title: string; at: number }[]>(
     [],
@@ -123,6 +126,7 @@ export function SettingsPanel({
       .then((status) => {
         setLocalTools(status);
         setComputerAppsInput((status.computerAllowedApps || []).join(', '));
+        setBrowserOriginsInput((status.browserAllowedOrigins || []).join(', '));
       })
       .catch(() =>
         setLocalTools({
@@ -132,6 +136,8 @@ export function SettingsPanel({
           ocr: false,
           searchProvider: 'auto',
           computerAllowedApps: [],
+          browserOriginPolicy: 'any',
+          browserAllowedOrigins: [],
         }),
       );
   }, [tab]);
@@ -143,6 +149,8 @@ export function SettingsPanel({
     ocr: boolean;
     searchProvider: 'auto' | 'deepseek' | 'local';
     computerAllowedApps: string[];
+    browserOriginPolicy: 'any' | 'allowlist';
+    browserAllowedOrigins: string[];
   }>) => {
     if (!localTools || localToolsBusy) return;
     setLocalToolsBusy(true);
@@ -549,6 +557,58 @@ export function SettingsPanel({
                 <span />
               </button>
             </div>
+            {localTools?.browser ? (
+              <div className="setting-row">
+                <div className="setting-row-text">
+                  <strong>AI 站点访问</strong>
+                  <span>限制 AI 浏览器工具可以访问的站点，新会话生效</span>
+                </div>
+                <select
+                  className="setting-select"
+                  value={localTools.browserOriginPolicy}
+                  disabled={localToolsBusy}
+                  onChange={(event) =>
+                    void updateLocalTools({
+                      browserOriginPolicy:
+                        event.target.value === 'allowlist' ? 'allowlist' : 'any',
+                    })
+                  }
+                >
+                  <option value="any">所有站点</option>
+                  <option value="allowlist">仅允许列表</option>
+                </select>
+              </div>
+            ) : null}
+            {localTools?.browser && localTools.browserOriginPolicy === 'allowlist' ? (
+              <div className="setting-row">
+                <div className="setting-row-text">
+                  <strong>允许的站点</strong>
+                  <span>逗号分隔 host 或 *.domain，例如 example.com, *.github.com</span>
+                </div>
+                <input
+                  className="setting-input"
+                  value={browserOriginsInput}
+                  placeholder="example.com, *.github.com"
+                  spellCheck={false}
+                  onChange={(event) => setBrowserOriginsInput(event.target.value)}
+                  onBlur={() => {
+                    const origins = [
+                      ...new Set(
+                        browserOriginsInput
+                          .split(/[,\n]/)
+                          .map((origin) => origin.trim())
+                          .filter(Boolean),
+                      ),
+                    ];
+                    setBrowserOriginsInput(origins.join(', '));
+                    void updateLocalTools({ browserAllowedOrigins: origins });
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') event.currentTarget.blur();
+                  }}
+                />
+              </div>
+            ) : null}
             <div className="setting-row">
               <div className="setting-row-text">
                 <strong>网页搜索与读取</strong>

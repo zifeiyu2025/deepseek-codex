@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('codex', {
   ocrFile: (payload) => ipcRenderer.invoke('app:ocr-file', payload),
   browserClearData: (payload) => ipcRenderer.invoke('browser:clear-data', payload),
   browserActivate: (webContentsId) => ipcRenderer.invoke('browser:activate', webContentsId),
+  captureScreen: () => ipcRenderer.invoke('app:capture-screen'),
+  browserSavePageShot: (dataUrl) => ipcRenderer.invoke('browser:save-page-shot', dataUrl),
   savePastedImage: () => ipcRenderer.invoke('app:save-pasted-image'),
   pathForFile: (file) => webUtils.getPathForFile(file),
   createWorktree: (repoPath) => ipcRenderer.invoke('app:create-worktree', repoPath),
