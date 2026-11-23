@@ -169,26 +169,37 @@ function subagentStatusLabel(status: unknown) {
       running: '运行中',
       active: '运行中',
       completed: '已完成',
-      waiting: '等待',
+      waiting: '等待指令',
+      waitingOnApproval: '等待审批',
+      waitingOnUserInput: '等待输入',
+      interrupted: '已中断',
       failed: '失败',
     };
-    return labels[status.toLowerCase()] || status;
+    return labels[status] || labels[status.toLowerCase()] || status;
   }
   if (status && typeof status === 'object') {
     const value = status as Record<string, any>;
-    if (value.active) {
-      return value.active.activeFlags?.length ? '等待审批/输入' : '运行中';
+    const type = String(value.type || '');
+    if (type === 'active' || value.active) {
+      const flags: string[] =
+        value.activeFlags || value.active_flags || value.active?.activeFlags || [];
+      const normalized = flags.map((flag) => String(flag).toLowerCase());
+      if (normalized.includes('waitingonapproval')) return '等待审批';
+      if (normalized.includes('waitingonuserinput')) return '等待输入';
+      return '运行中';
     }
-    if (value.idle !== undefined) return '空闲';
-    if (value.notLoaded !== undefined) return '未加载';
-    if (value.systemError !== undefined) return '错误';
+    if (type === 'idle' || value.idle !== undefined) return '空闲';
+    if (type === 'notLoaded' || value.notLoaded !== undefined) return '未加载';
+    if (type === 'systemError' || value.systemError !== undefined) return '错误';
   }
   return '未知';
 }
 
 function isRunningSubagent(status: unknown) {
   if (typeof status === 'string') return /running|active/i.test(status);
-  return Boolean(status && typeof status === 'object' && 'active' in status);
+  if (!status || typeof status !== 'object') return false;
+  const value = status as Record<string, any>;
+  return value.type === 'active' || 'active' in value;
 }
 
 function agentDisplayName(agent: ThreadSummary) {

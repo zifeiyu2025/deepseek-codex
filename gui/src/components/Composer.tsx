@@ -51,22 +51,37 @@ import { effortLabel } from '../lib/format';
 import { writeStorage } from '../lib/storage';
 
 function subagentStateLabel(status: unknown) {
-  const value =
-    typeof status === 'string'
-      ? status.toLowerCase()
-      : status && typeof status === 'object' && 'active' in status
-        ? 'running'
-        : '';
+  let value = typeof status === 'string' ? status : '';
+  if (status && typeof status === 'object') {
+    const object = status as Record<string, any>;
+    const type = String(object.type || '');
+    const flags = object.activeFlags || object.active_flags || object.active?.activeFlags || [];
+    if (type === 'active' || 'active' in object) {
+      const normalized = (Array.isArray(flags) ? flags : []).map((flag: unknown) =>
+        String(flag).toLowerCase(),
+      );
+      if (normalized.includes('waitingonapproval')) value = 'waitingOnApproval';
+      else if (normalized.includes('waitingonuserinput')) value = 'waitingOnUserInput';
+      else value = 'running';
+    } else {
+      value = type;
+    }
+  }
   const labels: Record<string, string> = {
     running: '正在工作',
     active: '正在工作',
     completed: '已完成',
     waiting: '等待指令',
+    waitingOnApproval: '等待审批',
+    waitingOnUserInput: '等待输入',
     failed: '失败',
     errored: '失败',
     interrupted: '已中断',
+    idle: '空闲',
+    notLoaded: '未加载',
+    systemError: '错误',
   };
-  return labels[value] || (typeof status === 'string' ? status : '未知');
+  return labels[value] || labels[value.toLowerCase()] || (typeof status === 'string' ? status : '未知');
 }
 
 export function Composer({
