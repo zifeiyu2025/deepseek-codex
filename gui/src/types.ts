@@ -122,7 +122,14 @@ export type MentionState = {
   query: string;
   tokenStart: number;
   index: number;
-  results: { path: string; fileName: string }[];
+  results: {
+    path: string;
+    fileName: string;
+    kind?: 'file' | 'agent';
+    threadId?: string;
+    status?: unknown;
+    model?: string | null;
+  }[];
 };
 
 export type ThreadGoalStatus =

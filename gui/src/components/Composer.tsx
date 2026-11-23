@@ -141,7 +141,11 @@ export function Composer({
   goal: ThreadGoal | null;
   hasThread: boolean;
   input: string;
-  insertMention: (item: { path: string; fileName?: string }) => void;
+  insertMention: (item: {
+    path: string;
+    fileName?: string;
+    kind?: 'file' | 'agent';
+  }) => void;
   itemsCount: number;
   mention: MentionState | null;
   mode: 'default' | 'plan';
@@ -522,16 +526,20 @@ export function Composer({
                 {mention.results.length > 0 ? (
                   mention.results.map((item, index) => (
                     <button
-                      key={item.path}
+                      key={`${item.kind || 'file'}-${item.path}`}
                       className={`mention-item ${index === mention.index ? 'active' : ''}`}
                       onMouseDown={(event) => {
                         event.preventDefault();
                         insertMention(item);
                       }}
                     >
-                      <FileText size={12} />
+                      {item.kind === 'agent' ? <Users size={12} /> : <FileText size={12} />}
                       <span className="mention-name">{item.fileName}</span>
-                      <span className="mention-path">{item.path}</span>
+                      <span className="mention-path">
+                        {item.kind === 'agent'
+                          ? `子代理${item.model ? ` · ${item.model}` : ''}`
+                          : item.path}
+                      </span>
                     </button>
                   ))
                 ) : (

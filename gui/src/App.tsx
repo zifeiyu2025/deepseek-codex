@@ -168,6 +168,18 @@ function isRunningSubagent(status: unknown) {
   return Boolean(status && typeof status === 'object' && 'active' in status);
 }
 
+function agentDisplayName(agent: ThreadSummary) {
+  return (
+    agent.agentNickname ||
+    agent.name ||
+    String(agent.preview || '')
+      .split('/')
+      .filter(Boolean)
+      .pop() ||
+    agent.id.slice(0, 8)
+  );
+}
+
 function loadSettings(): RuntimeSettings {
   const saved = readJsonStorage<Partial<RuntimeSettings> | null>(
     'deepseek-codex.settings',
@@ -410,6 +422,7 @@ export default function App() {
   const automationWatchdogsRef = useRef(new Map<string, number>());
   const mentionSeqRef = useRef(0);
   const goalRequestRef = useRef(0);
+  const subagentsRef = useRef<ThreadSummary[]>([]);
   const mcpSessionAllowedRef = useRef(new Set<string>());
   const worktreeRef = useRef<WorktreeInfo | null>(null);
   const pendingUserRef = useRef<string | null>(null);
@@ -785,8 +798,25 @@ export default function App() {
   useEffect(() => {
     if (mentionQuery == null) return;
     const query = mentionQuery.trim();
+    const agentResults = subagentsRef.current
+      .filter((agent) => isRunningSubagent(agent.status))
+      .filter(
+        (agent) =>
+          !query || agentDisplayName(agent).toLowerCase().includes(query.toLowerCase()),
+      )
+      .slice(0, 6)
+      .map((agent) => ({
+        kind: 'agent' as const,
+        path: agent.id,
+        fileName: agentDisplayName(agent),
+        threadId: agent.id,
+        status: agent.status,
+        model: agent.model,
+      }));
     if (!query || !activeCwd) {
-      setMention((current) => (current ? { ...current, results: [], index: 0 } : current));
+      setMention((current) =>
+        current ? { ...current, results: agentResults, index: 0 } : current,
+      );
       return;
     }
     const seq = ++mentionSeqRef.current;
@@ -800,21 +830,25 @@ export default function App() {
         .then((response) => {
           if (seq !== mentionSeqRef.current) return;
           const ignored = /(^|[\\/])(node_modules|\.git|dist|build|release|target|\.next|\.cache)([\\/]|$)/i;
-          const results = (response?.files || [])
+          const fileResults = (response?.files || [])
             .filter((entry: any) => (entry.match_type ?? entry.matchType) !== 'directory')
             .filter((entry: any) => !ignored.test(entry.path))
-            .slice(0, 12)
+            .slice(0, Math.max(0, 12 - agentResults.length))
             .map((entry: any) => ({
               path: entry.path,
               fileName: entry.file_name ?? entry.fileName ?? entry.path,
             }));
           setMention((current) =>
-            current ? { ...current, results, index: 0 } : current,
+            current
+              ? { ...current, results: [...agentResults, ...fileResults], index: 0 }
+              : current,
           );
         })
         .catch(() => {
           if (seq === mentionSeqRef.current) {
-            setMention((current) => (current ? { ...current, results: [] } : current));
+            setMention((current) =>
+              current ? { ...current, results: agentResults, index: 0 } : current,
+            );
           }
         });
     }, 160);
@@ -837,15 +871,16 @@ export default function App() {
   }, []);
 
   const insertMention = useCallback(
-    (item: { path: string }) => {
+    (item: { path: string; fileName?: string; kind?: 'file' | 'agent' }) => {
       if (!mention) return;
       const caret = textareaRef.current?.selectionStart ?? input.length;
       const start = Math.max(0, Math.min(mention.tokenStart, caret));
-      const next = `${input.slice(0, start)}@${item.path} ${input.slice(caret)}`;
+      const token = item.kind === 'agent' ? item.fileName || item.path : item.path;
+      const next = `${input.slice(0, start)}@${token} ${input.slice(caret)}`;
       setInput(next);
       setMention(null);
       requestAnimationFrame(() => {
-        const position = start + item.path.length + 2;
+        const position = start + token.length + 2;
         textareaRef.current?.focus();
         textareaRef.current?.setSelectionRange(position, position);
       });
@@ -2755,6 +2790,27 @@ export default function App() {
     }
     setError(null);
 
+    let relayName = '';
+    let turnText = text;
+    if (!runningRef.current) {
+      const agentMention = /^@([^\s]+)\s+([\s\S]+)$/.exec(text);
+      const targetAgent = agentMention
+        ? subagentsRef.current.find(
+            (agent) =>
+              isRunningSubagent(agent.status) &&
+              agentDisplayName(agent).toLowerCase() === agentMention[1].toLowerCase(),
+          )
+        : null;
+      if (targetAgent && agentMention) {
+        if (subagentParentId) {
+          setError('请先返回主会话，再 @ 子代理发送指令');
+          return;
+        }
+        relayName = agentDisplayName(targetAgent);
+        turnText = `请使用 collaboration.send_message 工具，把下面这条消息发送给子代理「${relayName}」（threadId: ${targetAgent.id}）：\n---\n${agentMention[2]}\n---\n发送后等待该子代理的回复，并把结果转述给我；不要自己直接完成这件事。`;
+      }
+    }
+
     if (runningRef.current) {
       const activeThread = threadRef.current;
       const activeTurn = turnIdRef.current;
@@ -2841,7 +2897,7 @@ export default function App() {
         approvalPolicy: activeSettings.approvalPolicy,
         effort: activeSettings.effort,
         sandboxPolicy: sandboxPolicyFor(activeSettings.sandbox, activeSettings.networkAccess),
-        input: buildTurnInput(text, files),
+        input: buildTurnInput(turnText, files),
       };
       if (modeRef.current === 'plan') {
         turnParams.collaborationMode = {
@@ -2858,6 +2914,7 @@ export default function App() {
       setLastTurnId(turn?.turn?.id || null);
       setAttachments([]);
       setOcrAttachments([]);
+      if (relayName) setNotice(`已请求主代理转发给子代理 ${relayName}`);
     } catch (sendError) {
       setRunning(false);
       pendingUserRef.current = null;
@@ -2866,7 +2923,7 @@ export default function App() {
       setInput((previous) => previous || text);
       setError(friendlyClientError(sendError));
     }
-  }, [attachments, buildTurnInput, config, input, ocrBusy, preparing, refreshThreads, worktreeMode]);
+  }, [attachments, buildTurnInput, config, input, ocrBusy, preparing, refreshThreads, resumeThread, subagentParentId, worktreeMode]);
 
   const retryLastTurn = useCallback(async () => {
     if (!threadRef.current || !lastTurnIdRef.current || runningRef.current) return;
@@ -3007,6 +3064,10 @@ export default function App() {
     }
     return [...map.values()];
   }, [items, threadId]);
+
+  useEffect(() => {
+    subagentsRef.current = subagents;
+  }, [subagents]);
 
   const stopAllSubagents = useCallback(async () => {
     const running = subagents.filter((agent) => isRunningSubagent(agent.status));
