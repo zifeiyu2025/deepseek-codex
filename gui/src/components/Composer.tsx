@@ -128,46 +128,51 @@ export function Composer({
           itemsCount > 0 &&
           (settings.approvalPolicy === 'never' || settings.sandbox === 'danger-full-access') ? (
             <div className="autonomy-banner">
-              <AlertTriangle size={15} />
-              <div className="autonomy-body">
-                <strong>
-                  {settings.sandbox === 'danger-full-access' ? '已开启完全访问' : '已开启自主执行'}
-                </strong>
-                <span>
-                  {settings.sandbox === 'danger-full-access'
-                    ? 'Codex 可以编辑任意文件并运行命令，无需逐条确认。这会增加数据丢失或信息泄露的风险。'
-                    : 'Codex 会执行命令与修改文件而不再逐条确认；请确认工作区与沙箱范围可信。'}{' '}
-                  <button
-                    className="autonomy-learn"
-                    onClick={() =>
-                      window.codex
-                        .openExternal('https://learn.chatgpt.com/docs/sandboxing?surface=app')
-                        .catch(() => {})
-                    }
-                  >
-                    了解详情
-                  </button>
-                </span>
+              <div className="autonomy-main">
+                <AlertTriangle size={15} />
+                <div className="autonomy-body">
+                  <strong>
+                    {settings.sandbox === 'danger-full-access' ? '已开启完全访问' : '已开启自主执行'}
+                  </strong>
+                  <span>
+                    {settings.sandbox === 'danger-full-access'
+                      ? 'Codex 可以编辑任意文件并运行命令，无需逐条确认。这会增加数据丢失或信息泄露的风险。'
+                      : 'Codex 会执行命令与修改文件而不再逐条确认；请确认工作区与沙箱范围可信。'}{' '}
+                    <button
+                      className="autonomy-learn"
+                      onClick={() =>
+                        window.codex
+                          .openExternal('https://learn.chatgpt.com/docs/sandboxing?surface=app')
+                          .catch(() => {})
+                      }
+                    >
+                      了解详情
+                    </button>
+                  </span>
+                </div>
               </div>
-              <button
-                className="autonomy-dismiss"
-                onClick={() => {
-                  writeStorage(
-                    'deepseek-codex.autonomyHiddenUntil',
-                    String(Date.now() + 28 * 24 * 60 * 60 * 1000),
-                  );
-                  setAutonomyHidden(true);
-                }}
-              >
-                28 天内不再显示
-              </button>
-              <button
-                className="autonomy-close"
-                title="关闭"
-                onClick={() => setAutonomyHidden(true)}
-              >
-                <X size={13} />
-              </button>
+              <div className="autonomy-actions">
+                <button
+                  className="autonomy-dismiss"
+                  onClick={() => {
+                    writeStorage(
+                      'deepseek-codex.autonomyHiddenUntil',
+                      String(Date.now() + 28 * 24 * 60 * 60 * 1000),
+                    );
+                    setAutonomyHidden(true);
+                  }}
+                >
+                  28 天内不再显示
+                </button>
+                <button
+                  className="autonomy-close"
+                  title="关闭"
+                  aria-label="关闭提示"
+                  onClick={() => setAutonomyHidden(true)}
+                >
+                  <X size={13} />
+                </button>
+              </div>
             </div>
           ) : null}
           <div
