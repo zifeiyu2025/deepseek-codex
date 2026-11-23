@@ -100,6 +100,18 @@ const ALLOWED_METHODS = new Set([
 ]);
 
 const THREAD_CONFIG_METHODS = new Set(['thread/start', 'thread/resume', 'thread/fork']);
+const COMPUTER_TOOL_NAMES = [
+  'computer_screenshot',
+  'computer_monitors',
+  'computer_active_window',
+  'computer_list_apps',
+  'computer_focus_app',
+  'computer_move',
+  'computer_click',
+  'computer_type',
+  'computer_key',
+  'computer_scroll',
+];
 
 let win = null;
 let tray = null;
@@ -254,6 +266,68 @@ function setupDownloadTracking() {
   });
 }
 
+function isBlockedComputerApp(appId) {
+  const normalized = String(appId || '').trim().replace(/\\/g, '/');
+  const process = (normalized.split('/').pop() || normalized)
+    .toLowerCase()
+    .replace(/^process:/, '')
+    .replace(/\.exe$/, '');
+  return (
+    [
+      'cmd',
+      'powershell',
+      'pwsh',
+      'windowsterminal',
+      'conhost',
+      'openconsole',
+      'codex',
+      'chatgpt',
+      'deepseek codex',
+      'electron',
+      'qoder',
+      'securityhealthsystray',
+      'securityhealthui',
+      'msascui',
+      'wdsecurity',
+      'windowsdefender',
+      'taskmgr',
+      'credentialui',
+      'consent',
+      'lockapp',
+      'mstsc',
+      'mmc',
+      '1password',
+      'bitwarden',
+      'keepass',
+      'keepassxc',
+      'lastpass',
+      'dashlane',
+    ].includes(process) || process.startsWith('deepseek-codex')
+  );
+}
+
+function normalizeComputerApps(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const apps = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string') continue;
+    const app = entry.trim().replace(/[\u0000-\u001f]/g, '').replace(/\//g, '\\');
+    if (!app || app.length > 1024 || isBlockedComputerApp(app)) continue;
+    const key = app.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    apps.push(app);
+  }
+  return apps;
+}
+
+function writeLocalToolsPrefs(prefs) {
+  fs.mkdirSync(path.dirname(localToolsPrefsFile()), { recursive: true });
+  fs.writeFileSync(localToolsPrefsFile(), JSON.stringify(prefs));
+  return prefs;
+}
+
 function readLocalToolsPrefs() {
   const fallback = {
     browser: false,
@@ -279,12 +353,12 @@ function readLocalToolsPrefs() {
       search: Boolean(saved?.search),
       ocr: Boolean(saved?.ocr),
       searchProvider: provider,
-      computerAllowedApps: Array.isArray(saved?.computerAllowedApps)
-        ? saved.computerAllowedApps.filter((name) => typeof name === 'string' && name.trim())
-        : [],
+      computerAllowedApps: normalizeComputerApps(saved?.computerAllowedApps),
       browserOriginPolicy: originPolicy,
       browserAllowedOrigins: Array.isArray(saved?.browserAllowedOrigins)
-        ? saved.browserAllowedOrigins.filter((origin) => typeof origin === 'string' && origin.trim())
+        ? saved.browserAllowedOrigins
+            .filter((origin) => typeof origin === 'string' && origin.trim())
+            .map((origin) => origin.trim())
         : [],
       browserFullCdp: Boolean(saved?.browserFullCdp),
     };
@@ -406,9 +480,17 @@ function localMcpServerConfig(prefs) {
       SHANUI_ENABLE_WEB_SEARCH: prefs.search ? '1' : '0',
       SHANUI_ENABLE_OCR: prefs.ocr ? '1' : '0',
       SHANUI_COMPUTER_ALLOWED_APPS: JSON.stringify(prefs.computerAllowedApps || []),
+      SHANUI_LOCAL_TOOLS_FILE: localToolsPrefsFile(),
       SHANUI_BROWSER_FULL_CDP: prefs.browserFullCdp ? '1' : '0',
       SHANUI_COMPUTER_HISTORY_FILE: computerHistoryFile(),
     },
+    ...(prefs.computer
+      ? {
+          tools: Object.fromEntries(
+            COMPUTER_TOOL_NAMES.map((name) => [name, { approval_mode: 'approve' }]),
+          ),
+        }
+      : {}),
     default_tools_approval_mode: 'prompt',
     tool_timeout_sec: 120,
   };
@@ -1634,7 +1716,14 @@ async function startEngineInternal() {
   online = false;
   initPromise = null;
   client.on('notification', (message) => sendToRenderer('rpc:notification', message));
-  client.on('serverRequest', (message) => sendToRenderer('rpc:serverRequest', message));
+  client.on('serverRequest', (message) => {
+    if (message.method === 'mcpServer/elicitation/request' && win && !win.isDestroyed()) {
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    }
+    sendToRenderer('rpc:serverRequest', message);
+  });
   client.on('exit', (code, error) => {
     if (epoch !== engineEpoch) return;
     if (rpc === client) rpc = null;
@@ -1661,7 +1750,13 @@ async function startEngineInternal() {
           title: 'DeepSeek Codex',
           version: app.getVersion(),
         },
-        capabilities: { experimentalApi: true, requestAttestation: false },
+        capabilities: {
+          experimentalApi: true,
+          requestAttestation: false,
+          extensions: {
+            'openai/standard-form-input': {},
+          },
+        },
       },
       20000,
     )
@@ -2256,6 +2351,104 @@ handleIpc('app:clear-computer-history', () => {
   return true;
 });
 
+async function getCurrentComputerApp() {
+  const script = `Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class ShanuiForegroundWindow {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+}
+'@;
+$window = [ShanuiForegroundWindow]::GetForegroundWindow();
+if ($window -eq [IntPtr]::Zero) { Write-Output 'null'; exit 0 }
+$processId = [uint32]0;
+[void][ShanuiForegroundWindow]::GetWindowThreadProcessId($window, [ref]$processId);
+$process = Get-Process -Id $processId -ErrorAction SilentlyContinue;
+if (-not $process) { Write-Output 'null'; exit 0 }
+$buffer = New-Object System.Text.StringBuilder 512;
+[void][ShanuiForegroundWindow]::GetWindowText($window, $buffer, $buffer.Capacity);
+$executablePath = '';
+try { $executablePath = [string]$process.Path } catch {}
+Write-Output ([pscustomobject]@{
+  hwnd = $window.ToInt64();
+  processId = $processId;
+  process = $process.ProcessName;
+  path = $executablePath;
+  title = $buffer.ToString()
+} | ConvertTo-Json -Compress)`;
+  const output = await new Promise((resolve, reject) => {
+    execFile(
+      'powershell.exe',
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+      { windowsHide: true, timeout: 10000, maxBuffer: 1024 * 1024 },
+      (error, stdout) => {
+        if (error) reject(error);
+        else resolve(String(stdout || '').trim());
+      },
+    );
+  });
+  if (!output || output === 'null') return null;
+  const info = JSON.parse(output);
+  const process = String(info?.process || '').trim();
+  if (!process) return null;
+  const executablePath = String(info?.path || '').trim();
+  return {
+    appId: executablePath || `process:${process}`,
+    displayName: process,
+    process,
+    path: executablePath,
+    title: String(info?.title || ''),
+    hwnd: Number(info?.hwnd || 0),
+    processId: Number(info?.processId || 0),
+  };
+}
+
+async function listComputerApps() {
+  const script = `$items=@();
+foreach ($process in Get-Process) {
+  if ($process.MainWindowHandle -eq [IntPtr]::Zero) { continue }
+  $executablePath='';
+  try { $executablePath=[string]$process.Path } catch {}
+  $name=[string]$process.ProcessName;
+  $items += [pscustomobject]@{
+    appId=$(if ($executablePath) { $executablePath } else { "process:$name" });
+    displayName=$name;
+    process=$name;
+    path=$executablePath;
+    title=[string]$process.MainWindowTitle;
+    hwnd=$process.MainWindowHandle.ToInt64();
+    processId=$process.Id
+  }
+}
+Write-Output ([pscustomobject]@{apps=@($items | Sort-Object displayName)} | ConvertTo-Json -Depth 5 -Compress)`;
+  const output = await new Promise((resolve, reject) => {
+    execFile(
+      'powershell.exe',
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+      { windowsHide: true, timeout: 10000, maxBuffer: 4 * 1024 * 1024 },
+      (error, stdout) => {
+        if (error) reject(error);
+        else resolve(String(stdout || '').trim());
+      },
+    );
+  });
+  const parsed = JSON.parse(output || '{"apps":[]}');
+  return (Array.isArray(parsed?.apps) ? parsed.apps : [])
+    .filter((app) => app?.process && !isBlockedComputerApp(app.process))
+    .map((app) => ({
+      appId: String(app.path || '').trim() || `process:${app.process}`,
+      displayName: String(app.process),
+      process: String(app.process),
+      path: String(app.path || ''),
+      title: String(app.title || ''),
+      hwnd: Number(app.hwnd || 0),
+      processId: Number(app.processId || 0),
+    }));
+}
+
 handleIpc('app:get-local-tools', () => readLocalToolsPrefs());
 
 handleIpc('app:set-local-tools', async (_event, payload) => {
@@ -2267,11 +2460,7 @@ handleIpc('app:set-local-tools', async (_event, payload) => {
     searchProvider: ['auto', 'deepseek', 'local'].includes(payload?.searchProvider)
       ? payload.searchProvider
       : 'auto',
-    computerAllowedApps: Array.isArray(payload?.computerAllowedApps)
-      ? payload.computerAllowedApps
-          .filter((name) => typeof name === 'string' && name.trim())
-          .map((name) => name.trim())
-      : [],
+    computerAllowedApps: normalizeComputerApps(payload?.computerAllowedApps),
     browserOriginPolicy: payload?.browserOriginPolicy === 'allowlist' ? 'allowlist' : 'any',
     browserAllowedOrigins: Array.isArray(payload?.browserAllowedOrigins)
       ? payload.browserAllowedOrigins
@@ -2280,9 +2469,25 @@ handleIpc('app:set-local-tools', async (_event, payload) => {
       : [],
     browserFullCdp: Boolean(payload?.browserFullCdp),
   };
-  fs.mkdirSync(path.dirname(localToolsPrefsFile()), { recursive: true });
-  fs.writeFileSync(localToolsPrefsFile(), JSON.stringify(prefs));
-  return prefs;
+  return writeLocalToolsPrefs(prefs);
+});
+
+handleIpc('app:get-current-computer-app', () => getCurrentComputerApp());
+handleIpc('app:list-computer-apps', () => listComputerApps());
+
+handleIpc('app:allow-computer-app', (_event, appId) => {
+  if (isBlockedComputerApp(appId)) {
+    throw new Error('终端、安全软件与客户端自身禁止自动控制');
+  }
+  const prefs = readLocalToolsPrefs();
+  const normalized = normalizeComputerApps([appId]);
+  if (!normalized.length) throw new Error('应用标识无效');
+  const existing = new Set(prefs.computerAllowedApps.map((app) => app.toLowerCase()));
+  prefs.computerAllowedApps = [
+    ...prefs.computerAllowedApps,
+    ...normalized.filter((app) => !existing.has(app.toLowerCase())),
+  ];
+  return writeLocalToolsPrefs(prefs);
 });
 
 handleIpc('app:git-info', async (_event, targetPath) => {

@@ -215,6 +215,36 @@ function getJson(url) {
     '设置修改后保持打开',
     await evaluate("!!document.querySelector('.settings-back')"),
   );
+  const appPermission = JSON.parse(
+    await evaluate(`(async()=>{
+      const before=await window.codex.localToolsStatus();
+      const listed=await window.codex.listComputerApps();
+      const appId='C:\\\\Windows\\\\System32\\\\notepad.exe';
+      const added=await window.codex.allowComputerApp(appId);
+      const deduped=await window.codex.allowComputerApp(appId);
+      const restored=await window.codex.setLocalTools({
+        ...deduped,
+        computerAllowedApps:before.computerAllowedApps
+      });
+      const clientBlocked=await window.codex.allowComputerApp('DeepSeek Codex.exe').then(()=>false).catch(()=>true);
+      return JSON.stringify({
+        listed:Array.isArray(listed),
+        added:added.computerAllowedApps.some(app=>app.toLowerCase()===appId.toLowerCase()),
+        deduped:deduped.computerAllowedApps.filter(app=>app.toLowerCase()===appId.toLowerCase()).length===1,
+        restored:JSON.stringify(restored.computerAllowedApps)===JSON.stringify(before.computerAllowedApps),
+        clientBlocked
+      });
+    })()`),
+  );
+  check(
+    '电脑应用授权持久化',
+    appPermission.listed &&
+      appPermission.added &&
+      appPermission.deduped &&
+      appPermission.restored &&
+      appPermission.clientBlocked,
+    JSON.stringify(appPermission),
+  );
   await evaluate("document.querySelector('.settings-back')?.click(); true");
   await sleep(500);
 

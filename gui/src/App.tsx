@@ -124,6 +124,22 @@ import type {
 
 type RailTab = 'files' | 'browser' | 'review';
 
+type McpElicitationState = {
+  id: number | string;
+  serverName?: string;
+  message: string;
+  computerApp?: {
+    appId: string;
+    displayName: string;
+    process: string;
+    title: string;
+    path?: string;
+    tool?: string;
+  };
+};
+
+type ComputerPermissionChoice = 'once' | 'session' | 'always';
+
 const DEFAULT_SETTINGS: RuntimeSettings = {
   approvalPolicy: 'on-request',
   approvalsReviewer: 'user',
@@ -264,11 +280,8 @@ export default function App() {
   const [turnId, setTurnId] = useState<string | null>(null);
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
   const [pendingInput, setPendingInput] = useState<PendingUserInput | null>(null);
-  const [mcpElicitation, setMcpElicitation] = useState<{
-    id: number | string;
-    serverName?: string;
-    message: string;
-  } | null>(null);
+  const [mcpElicitation, setMcpElicitation] = useState<McpElicitationState | null>(null);
+  const [mcpElicitationBusy, setMcpElicitationBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [keyDialog, setKeyDialog] = useState(false);
@@ -1163,6 +1176,7 @@ export default function App() {
           cwd: automation.cwd || cwdRef.current,
           model: modelRef.current,
           modelProvider: config.defaultProvider || 'deepseek',
+          threadSource: 'user',
           approvalPolicy: 'never',
           sandbox: 'danger-full-access',
           projectId: automation.projectId || undefined,
@@ -1582,8 +1596,15 @@ export default function App() {
       }
       if (request.method === 'mcpServer/elicitation/request') {
         const serverName = request.params?.serverName;
-        if (serverName && mcpSessionAllowedRef.current.has(serverName)) {
-          window.codex.respond(request.id, { action: 'accept', content: null, meta: null });
+        const elicitation = request.params?.request;
+        const meta = elicitation?._meta || request.params?._meta;
+        const computerApp = meta?.shanuiComputerApp;
+        if (
+          serverName &&
+          serverName !== 'shanui_local' &&
+          mcpSessionAllowedRef.current.has(serverName)
+        ) {
+          window.codex.respond(request.id, { action: 'accept', content: null, _meta: null });
           return;
         }
         setMcpElicitation({
@@ -1591,8 +1612,19 @@ export default function App() {
           serverName,
           message:
             request.params?.message ||
-            request.params?.request?.message ||
+            elicitation?.message ||
             '允许这次 MCP 工具调用？',
+          computerApp:
+            typeof computerApp?.appId === 'string' && computerApp.appId.trim()
+              ? {
+                  appId: computerApp.appId,
+                  displayName: computerApp.displayName || computerApp.process || '当前应用',
+                  process: computerApp.process || '',
+                  title: computerApp.title || '',
+                  path: computerApp.path || '',
+                  tool: computerApp.tool || '',
+                }
+              : undefined,
         });
         return;
       }
@@ -1654,15 +1686,34 @@ export default function App() {
   }, [input]);
 
   const respondMcpElicitation = useCallback(
-    (action: 'accept' | 'decline' | 'cancel', remember = false) => {
-      if (!mcpElicitation) return;
-      if (remember && mcpElicitation.serverName) {
+    async (
+      action: 'accept' | 'decline' | 'cancel',
+      decision?: ComputerPermissionChoice,
+      remember = false,
+    ) => {
+      if (!mcpElicitation || mcpElicitationBusy) return;
+      let content: Record<string, string> | null = null;
+      if (action === 'accept' && mcpElicitation.computerApp) {
+        const choice = decision || 'once';
+        content = { decision: choice };
+        if (choice === 'always') {
+          setMcpElicitationBusy(true);
+          try {
+            await window.codex.allowComputerApp(mcpElicitation.computerApp.appId);
+          } catch (error) {
+            setError(friendlyClientError(error));
+            setMcpElicitationBusy(false);
+            return;
+          }
+        }
+      } else if (remember && mcpElicitation.serverName) {
         mcpSessionAllowedRef.current.add(mcpElicitation.serverName);
       }
+      setMcpElicitationBusy(false);
       setMcpElicitation(null);
-      window.codex.respond(mcpElicitation.id, { action, content: null, meta: null });
+      window.codex.respond(mcpElicitation.id, { action, content, _meta: null });
     },
-    [mcpElicitation],
+    [mcpElicitation, mcpElicitationBusy],
   );
 
   const decide = useCallback(
@@ -1766,6 +1817,7 @@ export default function App() {
           cwd: worktreeRef.current?.path || cwdRef.current,
           model: modelRef.current,
           modelProvider: config?.defaultProvider || 'deepseek',
+          threadSource: 'user',
           approvalPolicy: settingsRef.current.approvalPolicy,
           approvalsReviewer: settingsRef.current.approvalsReviewer,
           ...sandboxSelection(settingsRef.current),
@@ -2778,6 +2830,7 @@ export default function App() {
             cwd: worktreeRef.current?.path || cwdRef.current,
             model: modelRef.current,
             modelProvider: config.defaultProvider || 'deepseek',
+            threadSource: 'user',
             approvalPolicy: settingsRef.current.approvalPolicy,
             approvalsReviewer: settingsRef.current.approvalsReviewer,
             ...sandboxSelection(settingsRef.current),
@@ -2920,6 +2973,7 @@ export default function App() {
           cwd: effectiveCwd,
           model: modelRef.current,
           modelProvider: config.defaultProvider || 'deepseek',
+          threadSource: 'user',
           approvalPolicy: activeSettings.approvalPolicy,
           approvalsReviewer: activeSettings.approvalsReviewer,
           ...sandboxSelection(activeSettings),
@@ -4047,28 +4101,73 @@ export default function App() {
 
       {mcpElicitation ? (
         <Modal
-          onClose={() => respondMcpElicitation('cancel')}
+          onClose={() => void respondMcpElicitation('cancel')}
           labelledBy="mcp-approval-title"
         >
-          <div className="key-card">
-            <div className="key-kicker">MCP TOOL</div>
+          <div className={`key-card ${mcpElicitation.computerApp ? 'mcp-permission-card' : ''}`}>
+            <div className="key-kicker">
+              {mcpElicitation.computerApp ? 'COMPUTER USE' : 'MCP TOOL'}
+            </div>
             <h2 id="mcp-approval-title">
-              {mcpElicitation.serverName
-                ? `允许 ${mcpElicitation.serverName} 执行操作？`
-                : '允许这次操作？'}
+              {mcpElicitation.computerApp
+                ? `允许控制 ${mcpElicitation.computerApp.displayName}？`
+                : mcpElicitation.serverName
+                  ? `允许 ${mcpElicitation.serverName} 执行操作？`
+                  : '允许这次操作？'}
             </h2>
             <p>{mcpElicitation.message}</p>
-            <div className="key-actions">
-              <button onClick={() => respondMcpElicitation('decline')}>拒绝</button>
-              {mcpElicitation.serverName ? (
-                <button onClick={() => respondMcpElicitation('accept', true)}>
+            {mcpElicitation.computerApp ? (
+              <div className="mcp-app-meta">
+                <strong>{mcpElicitation.computerApp.title || mcpElicitation.computerApp.displayName}</strong>
+                <span>
+                  {mcpElicitation.computerApp.path || mcpElicitation.computerApp.appId}
+                </span>
+                {mcpElicitation.computerApp.tool ? (
+                  <span>{mcpElicitation.computerApp.tool}</span>
+                ) : null}
+              </div>
+            ) : null}
+            {mcpElicitation.computerApp ? (
+              <div className="key-actions mcp-permission-actions">
+                <button
+                  disabled={mcpElicitationBusy}
+                  onClick={() => void respondMcpElicitation('decline')}
+                >
+                  拒绝
+                </button>
+                <button
+                  disabled={mcpElicitationBusy}
+                  onClick={() => void respondMcpElicitation('accept', 'once')}
+                >
+                  允许本次
+                </button>
+                <button
+                  disabled={mcpElicitationBusy}
+                  onClick={() => void respondMcpElicitation('accept', 'session')}
+                >
                   本次会话允许
                 </button>
-              ) : null}
-              <button className="primary" onClick={() => respondMcpElicitation('accept')}>
-                允许
-              </button>
-            </div>
+                <button
+                  className="primary"
+                  disabled={mcpElicitationBusy}
+                  onClick={() => void respondMcpElicitation('accept', 'always')}
+                >
+                  {mcpElicitationBusy ? '正在保存…' : '始终允许'}
+                </button>
+              </div>
+            ) : (
+              <div className="key-actions">
+                <button onClick={() => void respondMcpElicitation('decline')}>拒绝</button>
+                {mcpElicitation.serverName ? (
+                  <button onClick={() => void respondMcpElicitation('accept', undefined, true)}>
+                    本次会话允许
+                  </button>
+                ) : null}
+                <button className="primary" onClick={() => void respondMcpElicitation('accept')}>
+                  允许
+                </button>
+              </div>
+            )}
           </div>
         </Modal>
       ) : null}

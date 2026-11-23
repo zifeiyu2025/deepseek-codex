@@ -11,14 +11,97 @@ const enableComputer = process.env.SHANUI_ENABLE_COMPUTER === '1';
 const enableWebSearch = process.env.SHANUI_ENABLE_WEB_SEARCH === '1';
 const enableOcr = process.env.SHANUI_ENABLE_OCR === '1';
 const enableFullCdp = process.env.SHANUI_BROWSER_FULL_CDP === '1';
-const computerAllowedApps = (() => {
+const localToolsFile = process.env.SHANUI_LOCAL_TOOLS_FILE || '';
+const initialComputerAllowedApps = (() => {
   try {
     const parsed = JSON.parse(process.env.SHANUI_COMPUTER_ALLOWED_APPS || '[]');
-    return Array.isArray(parsed) ? parsed.filter((name) => typeof name === 'string' && name.trim()) : [];
+    return Array.isArray(parsed)
+      ? parsed
+          .filter((name) => typeof name === 'string' && name.trim())
+          .map((name) => name.trim().replace(/\//g, '\\'))
+      : [];
   } catch {
     return [];
   }
 })();
+const computerSessionAllowedApps = new Map();
+
+function computerSessionScope(meta) {
+  return String(meta?.threadId || meta?.sessionId || 'default');
+}
+
+function grantComputerSession(scope, appId) {
+  const granted = computerSessionAllowedApps.get(scope) || new Set();
+  granted.add(appId.toLowerCase());
+  computerSessionAllowedApps.set(scope, granted);
+}
+const pendingElicitations = new Map();
+let nextElicitationId = 1;
+let computerQueue = Promise.resolve();
+const BLOCKED_COMPUTER_PROCESSES = new Set([
+  'cmd',
+  'powershell',
+  'pwsh',
+  'windowsterminal',
+  'conhost',
+  'openconsole',
+  'codex',
+  'chatgpt',
+  'deepseek codex',
+  'electron',
+  'qoder',
+  'securityhealthsystray',
+  'securityhealthui',
+  'msascui',
+  'wdsecurity',
+  'windowsdefender',
+  'taskmgr',
+  'credentialui',
+  'consent',
+  'lockapp',
+  'mstsc',
+  'mmc',
+  '1password',
+  'bitwarden',
+  'keepass',
+  'keepassxc',
+  'lastpass',
+  'dashlane',
+]);
+
+function readPersistedComputerApps() {
+  if (!localToolsFile) return [...initialComputerAllowedApps];
+  try {
+    const saved = JSON.parse(fs.readFileSync(localToolsFile, 'utf8'));
+    const entries = Array.isArray(saved?.computerAllowedApps)
+      ? [...initialComputerAllowedApps, ...saved.computerAllowedApps]
+      : [...initialComputerAllowedApps];
+    const seen = new Set();
+    return entries
+      .filter((entry) => typeof entry === 'string' && entry.trim())
+      .map((entry) => entry.trim().replace(/\//g, '\\'))
+      .filter((entry) => {
+        const key = entry.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  } catch {
+    return [...initialComputerAllowedApps];
+  }
+}
+
+function requestElicitation(params) {
+  const id = `shanui-elicitation-${nextElicitationId++}`;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingElicitations.delete(id);
+      reject(new Error('电脑操作授权请求超时'));
+    }, 115000);
+    pendingElicitations.set(id, { resolve, reject, timer });
+    send({ jsonrpc: '2.0', id, method: 'elicitation/create', params });
+  });
+}
 
 function log(message) {
   process.stderr.write(`[shanui-local-mcp] ${message}\n`);
@@ -100,7 +183,8 @@ function runPowerShell(script, args, timeout = 30000) {
   });
 }
 
-async function computerScreenshot(args) {
+async function computerScreenshot(args, scope) {
+  await ensureComputerAppAllowed('computer_screenshot', scope);
   const file = path.join(os.tmpdir(), `shanui-screen-${Date.now()}-${Math.random().toString(16).slice(2)}.png`);
   const requested = Number(args?.screen);
   const screenIndex = Number.isInteger(requested) ? requested : -1;
@@ -138,27 +222,150 @@ Write-Output ($items | ConvertTo-Json -Compress)`,
   );
 }
 
-async function ensureComputerAppAllowed() {
-  if (!computerAllowedApps.length) return;
-  const output = await computerActiveWindow();
-  let info = null;
-  try {
-    info = JSON.parse(output);
-  } catch {
-    info = null;
+function isBlockedComputerApp(info) {
+  const processName = String(info?.process || '').toLowerCase().replace(/\.exe$/, '');
+  return BLOCKED_COMPUTER_PROCESSES.has(processName) || processName.startsWith('deepseek-codex');
+}
+
+function computerAppMatches(allowedApps, info) {
+  const process = String(info?.process || '').toLowerCase();
+  const processName = process.replace(/\.exe$/, '');
+  const executablePath = String(info?.path || '').toLowerCase().replace(/\//g, '\\');
+  return allowedApps.some((entry) => {
+    const allowed = String(entry).toLowerCase().replace(/\//g, '\\');
+    if (executablePath && allowed === executablePath) return true;
+    if (allowed === `process:${processName}`) return true;
+    if (allowed === process || allowed === `${processName}.exe`) return true;
+    if (!allowed.includes('\\') && !allowed.startsWith('process:')) {
+      return allowed.replace(/\.exe$/, '') === processName;
+    }
+    return false;
+  });
+}
+
+async function activateComputerWindow(info) {
+  const handle = Math.trunc(Number(info?.hwnd || 0));
+  if (!handle) throw new Error('无法恢复目标应用焦点');
+  const output = await runPowerShell(
+    `Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class ShanuiActivateWindow {
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+}
+'@;
+$target=[IntPtr]${handle};
+$foreground=[ShanuiActivateWindow]::GetForegroundWindow();
+$foregroundProcessId=[uint32]0;
+$foregroundThread=[ShanuiActivateWindow]::GetWindowThreadProcessId($foreground,[ref]$foregroundProcessId);
+$currentThread=[ShanuiActivateWindow]::GetCurrentThreadId();
+$attached=$false;
+try {
+  if ($foregroundThread -ne $currentThread) {
+    $attached=[ShanuiActivateWindow]::AttachThreadInput($currentThread,$foregroundThread,$true);
   }
-  const processName = String(info?.process || '').toLowerCase();
-  const allowed = computerAllowedApps.some((name) => String(name).toLowerCase() === processName);
-  if (!allowed) {
-    throw new Error(`当前前台应用 ${info?.process || 'unknown'} 不在允许列表：${computerAllowedApps.join(', ')}`);
+  [void][ShanuiActivateWindow]::ShowWindow($target,9);
+  [void][ShanuiActivateWindow]::BringWindowToTop($target);
+  $activated=[ShanuiActivateWindow]::SetForegroundWindow($target);
+  Start-Sleep -Milliseconds 150;
+  $active=[ShanuiActivateWindow]::GetForegroundWindow();
+  $processId=[uint32]0;
+  [void][ShanuiActivateWindow]::GetWindowThreadProcessId($active,[ref]$processId);
+  Write-Output ([pscustomobject]@{activated=$activated;hwnd=$active.ToInt64();processId=$processId} | ConvertTo-Json -Compress)
+} finally {
+  if ($attached) { [void][ShanuiActivateWindow]::AttachThreadInput($currentThread,$foregroundThread,$false) }
+}`,
+    {},
+  );
+  const current = JSON.parse(output);
+  if (Number(current?.hwnd || 0) !== handle) {
+    throw new Error('无法恢复目标应用焦点，请切回目标应用后重试');
   }
 }
 
-async function computerMouse(action, args) {
+const COMPUTER_ACTION_LABELS = {
+  computer_screenshot: '截取屏幕',
+  computer_move: '移动鼠标',
+  computer_click: '点击鼠标',
+  computer_type: '输入文字',
+  computer_key: '按下按键',
+  computer_scroll: '滚动页面',
+};
+
+async function ensureComputerAppAllowed(tool, scope = 'default') {
+  let info;
+  try {
+    info = JSON.parse(await computerActiveWindow());
+  } catch {
+    info = null;
+  }
+  if (!info?.process) throw new Error('未检测到活动应用窗口');
+  if (isBlockedComputerApp(info)) {
+    throw new Error(`禁止自动控制 ${info.process}：终端、安全软件与客户端自身不在支持范围`);
+  }
+  const processName = String(info.process).toLowerCase().replace(/\.exe$/, '');
+  const appId = String(info.path || '').trim() || `process:${processName}`;
+  const sessionApps = computerSessionAllowedApps.get(scope) || new Set();
+  const allowed = computerAppMatches(
+    [...sessionApps, ...readPersistedComputerApps()],
+    info,
+  );
+  if (!allowed) {
+    const result = await requestElicitation({
+      mode: 'form',
+      message: `AI 将${COMPUTER_ACTION_LABELS[tool] || '操作'}「${info.process}」。请选择授权范围；确认后会恢复该应用焦点。`,
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          decision: {
+            type: 'string',
+            enum: ['once', 'session', 'always'],
+            enumNames: ['允许本次', '本次会话允许', '始终允许'],
+            default: 'once',
+          },
+        },
+        required: ['decision'],
+      },
+      _meta: {
+        shanuiComputerApp: {
+          appId,
+          displayName: info.process,
+          process: info.process,
+          path: info.path || '',
+          title: info.title || '',
+          tool,
+        },
+      },
+    });
+    if (result?.action !== 'accept') {
+      throw new Error(result?.action === 'cancel' ? '已取消电脑操作' : '已拒绝控制当前应用');
+    }
+    const decision = result?.content?.decision;
+    if (!['once', 'session', 'always'].includes(decision)) {
+      throw new Error('电脑操作授权结果无效');
+    }
+    if (decision === 'session' || decision === 'always') {
+      grantComputerSession(scope, appId);
+    }
+    await activateComputerWindow(info);
+  }
+  return info;
+}
+
+async function computerMouse(action, args, scope) {
   const x = Math.round(Number(args?.x));
   const y = Math.round(Number(args?.y));
   if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('坐标无效');
-  await ensureComputerAppAllowed();
+  await ensureComputerAppAllowed(
+    action === 'move' ? 'computer_move' : 'computer_click',
+    scope,
+  );
   const button = ['left', 'right', 'middle'].includes(args?.button) ? args.button : 'left';
   if (action === 'move') {
     await runPowerShell(
@@ -193,8 +400,8 @@ public static class ShanuiMouseClick {
   return `已${button === 'right' ? '右键' : button === 'middle' ? '中键' : '左键'}点击 (${x}, ${y})`;
 }
 
-async function computerScroll(args) {
-  await ensureComputerAppAllowed();
+async function computerScroll(args, scope) {
+  await ensureComputerAppAllowed('computer_scroll', scope);
   const direction = args?.direction === 'up' ? 1 : -1;
   const pages = Math.max(1, Math.min(20, Number(args?.pages) || 1));
   const delta = direction * pages * 120;
@@ -239,11 +446,11 @@ const KEY_MAP = {
   f11: '{F11}',
 };
 
-async function computerKey(args) {
+async function computerKey(args, scope) {
   const requested = String(args?.key || '').toLowerCase().trim();
   const mapped = KEY_MAP[requested];
   if (!mapped) throw new Error(`不支持的按键：${requested}`);
-  await ensureComputerAppAllowed();
+  await ensureComputerAppAllowed('computer_key', scope);
   await runPowerShell(
     `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${mapped.replace(/'/g, "''")}');`,
     {},
@@ -251,10 +458,10 @@ async function computerKey(args) {
   return `已按下 ${requested}`;
 }
 
-async function computerType(args) {
+async function computerType(args, scope) {
   const text = typeof args?.text === 'string' ? args.text : '';
   if (!text) throw new Error('缺少输入文本');
-  await ensureComputerAppAllowed();
+  await ensureComputerAppAllowed('computer_type', scope);
   const encoded = Buffer.from(text, 'utf8').toString('base64');
   await runPowerShell(
     `Add-Type -AssemblyName System.Windows.Forms;
@@ -271,7 +478,7 @@ Write-Output 'ok'`,
 }
 
 async function computerActiveWindow() {
-  const output = await runPowerShell(
+  return runPowerShell(
     `Add-Type @'
 using System;
 using System.Text;
@@ -283,15 +490,73 @@ public static class ShanuiWindow {
 }
 '@;
 $handle=[ShanuiWindow]::GetForegroundWindow();
+if ($handle -eq [IntPtr]::Zero) { Write-Output 'null'; exit 0 }
 $buffer=New-Object System.Text.StringBuilder 512;
 [ShanuiWindow]::GetWindowText($handle,$buffer,$buffer.Capacity) | Out-Null;
 $processId=0;
 [ShanuiWindow]::GetWindowThreadProcessId($handle,[ref]$processId) | Out-Null;
 $process=Get-Process -Id $processId -ErrorAction SilentlyContinue;
-Write-Output ([pscustomobject]@{title=$buffer.ToString();processId=$processId;process=$process.ProcessName} | ConvertTo-Json -Compress)`,
+if (-not $process) { Write-Output 'null'; exit 0 }
+$executablePath='';
+try { $executablePath=[string]$process.Path } catch {}
+Write-Output ([pscustomobject]@{
+  hwnd=$handle.ToInt64();
+  title=$buffer.ToString();
+  processId=$processId;
+  process=$process.ProcessName;
+  path=$executablePath
+} | ConvertTo-Json -Compress)`,
     {},
   );
-  return output;
+}
+
+async function computerListApps() {
+  return runPowerShell(
+    `$items=@();
+foreach ($process in Get-Process) {
+  if ($process.MainWindowHandle -eq [IntPtr]::Zero) { continue }
+  $executablePath='';
+  try { $executablePath=[string]$process.Path } catch {}
+  $name=[string]$process.ProcessName;
+  $items += [pscustomobject]@{
+    appId=$(if ($executablePath) { $executablePath } else { "process:$name" });
+    displayName=$name;
+    process=$name;
+    path=$executablePath;
+    windows=@([pscustomobject]@{
+      hwnd=$process.MainWindowHandle.ToInt64();
+      title=[string]$process.MainWindowTitle
+    })
+  }
+}
+Write-Output ([pscustomobject]@{apps=@($items | Sort-Object displayName)} | ConvertTo-Json -Depth 5 -Compress)`,
+    {},
+  );
+}
+
+async function computerFocusApp(args) {
+  const requestedAppId = String(args?.appId || '').trim().toLowerCase();
+  const requestedWindow = Math.trunc(Number(args?.hwnd || 0));
+  if (!requestedAppId && !requestedWindow) throw new Error('缺少 appId 或 hwnd');
+  const listed = JSON.parse(await computerListApps());
+  const apps = Array.isArray(listed?.apps) ? listed.apps : [];
+  const app = apps.find((entry) => {
+    if (requestedAppId && String(entry.appId).toLowerCase() === requestedAppId) return true;
+    const window = (entry.windows || []).find(
+      (candidate) => Number(candidate.hwnd) === requestedWindow,
+    );
+    return Boolean(window);
+  });
+  if (!app) throw new Error('未找到指定应用或窗口');
+  if (isBlockedComputerApp(app)) {
+    throw new Error(`禁止自动控制 ${app.process}`);
+  }
+  const window = requestedWindow
+    ? (app.windows || []).find((candidate) => Number(candidate.hwnd) === requestedWindow)
+    : app.windows?.[0];
+  if (!window?.hwnd) throw new Error('指定应用没有可见窗口');
+  await activateComputerWindow({ hwnd: Number(window.hwnd) });
+  return `已聚焦 ${app.displayName}：${window.title || app.appId}`;
 }
 
 const browserTools = [
@@ -482,8 +747,27 @@ const computerTools = [
   },
   {
     name: 'computer_active_window',
-    description: 'Return the active window title and process.',
+    description:
+      'Return the active window title, process, executable path, appId, and window handle.',
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'computer_list_apps',
+    description:
+      'List applications with visible windows, including stable appIds, executable paths, and window titles.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'computer_focus_app',
+    description:
+      'Focus a visible application window by appId or hwnd before controlling it. Focusing alone does not grant input permission.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        appId: { type: 'string', description: 'Stable appId from computer_list_apps' },
+        hwnd: { type: 'number', description: 'Window handle from computer_list_apps' },
+      },
+    },
   },
   {
     name: 'computer_move',
@@ -538,9 +822,9 @@ const computerTools = [
   },
 ];
 
-async function runComputerTool(name, args) {
+async function runComputerTool(name, args, scope = 'default') {
   if (name === 'computer_screenshot') {
-    const image = await computerScreenshot(args);
+    const image = await computerScreenshot(args, scope);
     return { content: [{ type: 'image', data: image.data, mimeType: image.mimeType }] };
   }
   if (name === 'computer_monitors') {
@@ -549,20 +833,26 @@ async function runComputerTool(name, args) {
   if (name === 'computer_active_window') {
     return { content: [{ type: 'text', text: await computerActiveWindow() }] };
   }
+  if (name === 'computer_list_apps') {
+    return { content: [{ type: 'text', text: await computerListApps() }] };
+  }
+  if (name === 'computer_focus_app') {
+    return { content: [{ type: 'text', text: await computerFocusApp(args) }] };
+  }
   if (name === 'computer_move') {
-    return { content: [{ type: 'text', text: await computerMouse('move', args) }] };
+    return { content: [{ type: 'text', text: await computerMouse('move', args, scope) }] };
   }
   if (name === 'computer_click') {
-    return { content: [{ type: 'text', text: await computerMouse('click', args) }] };
+    return { content: [{ type: 'text', text: await computerMouse('click', args, scope) }] };
   }
   if (name === 'computer_type') {
-    return { content: [{ type: 'text', text: await computerType(args) }] };
+    return { content: [{ type: 'text', text: await computerType(args, scope) }] };
   }
   if (name === 'computer_key') {
-    return { content: [{ type: 'text', text: await computerKey(args) }] };
+    return { content: [{ type: 'text', text: await computerKey(args, scope) }] };
   }
   if (name === 'computer_scroll') {
-    return { content: [{ type: 'text', text: await computerScroll(args) }] };
+    return { content: [{ type: 'text', text: await computerScroll(args, scope) }] };
   }
   throw new Error(`未知电脑工具：${name}`);
 }
@@ -571,7 +861,7 @@ function recordComputerHistory(name, args, ok, error) {
   const file = process.env.SHANUI_COMPUTER_HISTORY_FILE;
   if (!file) return;
   const safe = {};
-  for (const key of ['screen', 'x', 'y', 'button', 'direction', 'pages', 'key']) {
+  for (const key of ['screen', 'x', 'y', 'button', 'direction', 'pages', 'key', 'appId', 'hwnd']) {
     if (args?.[key] !== undefined) safe[key] = args[key];
   }
   if (typeof args?.text === 'string') safe.textLength = args.text.length;
@@ -591,18 +881,24 @@ function recordComputerHistory(name, args, ok, error) {
   }
 }
 
-async function withComputerHistory(name, args) {
-  try {
-    const result = await runComputerTool(name, args);
-    recordComputerHistory(name, args, true);
-    return result;
-  } catch (error) {
-    recordComputerHistory(name, args, false, String(error?.message || error).slice(0, 300));
-    throw error;
-  }
+async function withComputerHistory(name, args, meta) {
+  const scope = computerSessionScope(meta);
+  const run = async () => {
+    try {
+      const result = await runComputerTool(name, args, scope);
+      recordComputerHistory(name, args, true);
+      return result;
+    } catch (error) {
+      recordComputerHistory(name, args, false, String(error?.message || error).slice(0, 300));
+      throw error;
+    }
+  };
+  const result = computerQueue.then(run, run);
+  computerQueue = result.catch(() => {});
+  return result;
 }
 
-async function callTool(name, args) {
+async function callTool(name, args, meta) {
   if (name === 'web_search' || name === 'web_fetch') {
     if (!enableWebSearch) throw new Error('网页搜索未启用');
     const result = await bridgeRequest(name, args || {});
@@ -630,7 +926,7 @@ async function callTool(name, args) {
   }
   if (name.startsWith('computer_')) {
     if (!enableComputer) throw new Error('电脑控制未启用');
-    return withComputerHistory(name, args || {});
+    return withComputerHistory(name, args || {}, meta);
   }
   throw new Error(`未知工具：${name}`);
 }
@@ -644,13 +940,34 @@ const tools = [
 
 function handle(message) {
   if (!message || message.jsonrpc !== '2.0') return;
+  if (message.id !== undefined && pendingElicitations.has(String(message.id))) {
+    const pending = pendingElicitations.get(String(message.id));
+    pendingElicitations.delete(String(message.id));
+    clearTimeout(pending.timer);
+    if (message.error) {
+      pending.reject(new Error(message.error?.message || '电脑操作授权请求失败'));
+    } else {
+      pending.resolve(message.result || {});
+    }
+    return;
+  }
+  if (message.method === 'notifications/cancelled') {
+    const requestId = String(message.params?.requestId || '');
+    const pending = pendingElicitations.get(requestId);
+    if (pending) {
+      pendingElicitations.delete(requestId);
+      clearTimeout(pending.timer);
+      pending.resolve({ action: 'cancel', content: null });
+    }
+    return;
+  }
   if (message.id === undefined) return;
   const { id, method, params } = message;
   if (method === 'initialize') {
     reply(id, {
       protocolVersion: params?.protocolVersion || '2025-06-18',
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: 'shanui-local-tools', version: '1.0.0' },
+      serverInfo: { name: 'shanui-local-tools', version: '1.1.0' },
     });
     return;
   }
@@ -665,7 +982,7 @@ function handle(message) {
   if (method === 'tools/call') {
     const name = params?.name;
     const args = params?.arguments || {};
-    callTool(name, args)
+    callTool(name, args, params?._meta)
       .then((result) => reply(id, result))
       .catch((error) =>
         reply(id, {

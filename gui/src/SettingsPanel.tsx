@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, ArrowLeft, Loader2, Search } from 'lucide-react';
-import type { AppConfig, ModelInfo, RuntimeSettings, SettingsTab } from './types';
+import type {
+  AppConfig,
+  ComputerApp,
+  LocalToolsPrefs,
+  ModelInfo,
+  RuntimeSettings,
+  SettingsTab,
+} from './types';
 import { friendlyClientError } from './lib/errors';
 import { effortLabel, formatTokens } from './lib/format';
 import { readStorage, removeStorage } from './lib/storage';
@@ -59,18 +66,11 @@ export function SettingsPanel({
   }, [onClose]);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxSetupMessage, setSandboxSetupMessage] = useState<string | null>(null);
-  const [localTools, setLocalTools] = useState<{
-    browser: boolean;
-    computer: boolean;
-    search: boolean;
-    ocr: boolean;
-    searchProvider: 'auto' | 'deepseek' | 'local';
-    computerAllowedApps: string[];
-    browserOriginPolicy: 'any' | 'allowlist';
-    browserAllowedOrigins: string[];
-    browserFullCdp: boolean;
-  } | null>(null);
+  const [localTools, setLocalTools] = useState<LocalToolsPrefs | null>(null);
   const [computerAppsInput, setComputerAppsInput] = useState('');
+  const [computerAppBusy, setComputerAppBusy] = useState(false);
+  const [computerAppChoices, setComputerAppChoices] = useState<ComputerApp[]>([]);
+  const [computerAppPickerOpen, setComputerAppPickerOpen] = useState(false);
   const [browserOriginsInput, setBrowserOriginsInput] = useState('');
   const [localToolsBusy, setLocalToolsBusy] = useState(false);
   const [browserHistory, setBrowserHistory] = useState<{ url: string; title: string; at: number }[]>(
@@ -144,7 +144,7 @@ export function SettingsPanel({
       .localToolsStatus()
       .then((status) => {
         setLocalTools(status);
-        setComputerAppsInput((status.computerAllowedApps || []).join(', '));
+        setComputerAppsInput('');
         setBrowserOriginsInput((status.browserAllowedOrigins || []).join(', '));
       })
       .catch(() =>
@@ -162,28 +162,60 @@ export function SettingsPanel({
       );
   }, [tab]);
 
-  const updateLocalTools = async (patch: Partial<{
-    browser: boolean;
-    computer: boolean;
-    search: boolean;
-    ocr: boolean;
-    searchProvider: 'auto' | 'deepseek' | 'local';
-    computerAllowedApps: string[];
-    browserOriginPolicy: 'any' | 'allowlist';
-    browserAllowedOrigins: string[];
-    browserFullCdp: boolean;
-  }>) => {
+  const updateLocalTools = async (patch: Partial<LocalToolsPrefs>) => {
     if (!localTools || localToolsBusy) return;
     setLocalToolsBusy(true);
     try {
       const saved = await window.codex.setLocalTools({ ...localTools, ...patch });
       setLocalTools(saved);
-      setSettingsNotice('本地 AI 工具已更新；新建会话后生效。');
+      setSettingsNotice('本地 AI 工具已更新；新会话读取最新权限。');
     } catch (error: any) {
       setSettingsNotice(friendlyClientError(error));
     } finally {
       setLocalToolsBusy(false);
     }
+  };
+
+  const saveComputerApp = async (appId: string) => {
+    if (!appId.trim() || !localTools || localToolsBusy) return;
+    setLocalToolsBusy(true);
+    try {
+      const saved = await window.codex.allowComputerApp(appId);
+      setLocalTools(saved);
+      setComputerAppsInput('');
+      setSettingsNotice(`已始终允许：${appId.replace(/\\/g, '/').split('/').pop() || appId}`);
+    } catch (error: any) {
+      setSettingsNotice(friendlyClientError(error));
+    } finally {
+      setLocalToolsBusy(false);
+    }
+  };
+
+  const addComputerApp = async () => {
+    await saveComputerApp(computerAppsInput.trim());
+  };
+
+  const loadComputerAppChoices = async () => {
+    if (computerAppBusy) return;
+    setComputerAppBusy(true);
+    try {
+      const apps = await window.codex.listComputerApps();
+      setComputerAppChoices(Array.isArray(apps) ? apps : []);
+      setComputerAppPickerOpen(true);
+      if (!apps.length) setSettingsNotice('当前没有可添加的可见应用窗口');
+    } catch (error: any) {
+      setSettingsNotice(friendlyClientError(error));
+    } finally {
+      setComputerAppBusy(false);
+    }
+  };
+
+  const removeComputerApp = async (appId: string) => {
+    await updateLocalTools({
+      computerAllowedApps: (localTools?.computerAllowedApps || []).filter(
+        (app) => app.toLowerCase() !== appId.toLowerCase(),
+      ),
+    });
   };
 
   const clearBrowserHistory = () => {
@@ -825,37 +857,103 @@ export function SettingsPanel({
               </button>
             </div>
             {localTools?.computer ? (
-              <div className="setting-row">
-                <div className="setting-row-text">
-                  <strong>允许操作的应用</strong>
-                  <span>逗号分隔进程名；留空表示所有应用，新会话生效</span>
+              <>
+                <div className="setting-row setting-row-stack">
+                  <div className="setting-row-text">
+                    <strong>始终允许的应用</strong>
+                    <span>留空表示每个应用使用时询问；本次会话允许仅在当前对话线程内有效</span>
+                  </div>
+                  <div className="computer-app-controls">
+                    <input
+                      className="setting-input"
+                      value={computerAppsInput}
+                      placeholder="notepad 或 C:\\Windows\\System32\\notepad.exe"
+                      spellCheck={false}
+                      onChange={(event) => setComputerAppsInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') void addComputerApp();
+                      }}
+                    />
+                    <button
+                      className="settings-button"
+                      disabled={!computerAppsInput.trim() || localToolsBusy}
+                      onClick={() => void addComputerApp()}
+                    >
+                      添加
+                    </button>
+                    <button
+                      className="settings-button"
+                      disabled={computerAppBusy || localToolsBusy}
+                      onClick={() => void loadComputerAppChoices()}
+                    >
+                      {computerAppBusy ? <Loader2 className="spin" size={14} /> : null}
+                      选择运行应用
+                    </button>
+                  </div>
                 </div>
-                <input
-                  className="setting-input"
-                  value={computerAppsInput}
-                  placeholder="Code.exe, notepad.exe"
-                  spellCheck={false}
-                  onChange={(event) => setComputerAppsInput(event.target.value)}
-                  onBlur={() => {
-                    const apps = [
-                      ...new Set(
-                        computerAppsInput
-                          .split(/[,\n]/)
-                          .map((name) => name.trim())
-                          .filter(Boolean),
-                      ),
-                    ];
-                    setComputerAppsInput(apps.join(', '));
-                    void updateLocalTools({ computerAllowedApps: apps });
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') event.currentTarget.blur();
-                  }}
-                />
-              </div>
+                {computerAppPickerOpen ? (
+                  <div className="computer-app-picker">
+                    <div className="computer-app-picker-head">
+                      <strong>正在运行的应用</strong>
+                      <button
+                        className="icon-button"
+                        aria-label="关闭应用选择"
+                        onClick={() => setComputerAppPickerOpen(false)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    {computerAppChoices.map((app) => {
+                      const allowed = localTools.computerAllowedApps.some(
+                        (entry) => entry.toLowerCase() === app.appId.toLowerCase(),
+                      );
+                      return (
+                        <div className="computer-app-choice" key={app.appId}>
+                          <div>
+                            <strong>{app.title || app.displayName}</strong>
+                            <span>{app.path || app.appId}</span>
+                          </div>
+                          <button
+                            className="settings-button"
+                            disabled={allowed || localToolsBusy}
+                            onClick={() => void saveComputerApp(app.appId)}
+                          >
+                            {allowed ? '已允许' : '允许'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {localTools.computerAllowedApps.length > 0 ? (
+                  <div className="computer-app-list">
+                    {localTools.computerAllowedApps.map((appId) => (
+                      <div className="computer-app-row" key={appId}>
+                        <div>
+                          <strong>
+                            {appId.replace(/\\/g, '/').split('/').pop()?.replace(/\.exe$/i, '') ||
+                              appId}
+                          </strong>
+                          <span>{appId}</span>
+                        </div>
+                        <button
+                          className="icon-button"
+                          aria-label={`移除 ${appId}`}
+                          disabled={localToolsBusy}
+                          onClick={() => void removeComputerApp(appId)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="setting-cap-empty">尚未设置始终允许的应用</div>
+                )}
+              </>
             ) : null}
             <div className="setting-note">
-              每次工具调用仍需在对话中确认；新建会话后生效。浏览器控制只作用于内置 Browser 面板；网页搜索与读取在后台完成；文档识别会上传文件到 DeepSeek OCR；电脑控制仅在本机、仅在你明确授权的任务中使用。
+              电脑操作按应用授权：仅本次、本次会话或始终允许。终端、安全软件与客户端自身禁止自动化；授权后会恢复目标应用焦点，避免把输入发送到确认窗口。新建会话后生效。浏览器控制只作用于内置 Browser 面板；网页搜索与读取在后台完成；文档识别会上传文件到 DeepSeek OCR。
             </div>
           </div>
           <div className="setting-group">

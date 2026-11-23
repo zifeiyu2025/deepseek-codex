@@ -274,6 +274,28 @@ export type ApprovalRequest = {
   permissions?: any;
 };
 
+export type LocalToolsPrefs = {
+  browser: boolean;
+  computer: boolean;
+  search: boolean;
+  ocr: boolean;
+  searchProvider: 'auto' | 'deepseek' | 'local';
+  computerAllowedApps: string[];
+  browserOriginPolicy: 'any' | 'allowlist';
+  browserAllowedOrigins: string[];
+  browserFullCdp: boolean;
+};
+
+export type ComputerApp = {
+  appId: string;
+  displayName: string;
+  process: string;
+  path: string;
+  title: string;
+  hwnd: number;
+  processId: number;
+};
+
 declare global {
   interface Window {
     desktop: {
@@ -300,38 +322,11 @@ declare global {
       showInFolder(targetPath: string): Promise<boolean>;
       openPath(targetPath: string): Promise<string>;
       restartEngine(): Promise<boolean>;
-      localToolsStatus(): Promise<{
-        browser: boolean;
-        computer: boolean;
-        search: boolean;
-        ocr: boolean;
-        searchProvider: 'auto' | 'deepseek' | 'local';
-        computerAllowedApps: string[];
-        browserOriginPolicy: 'any' | 'allowlist';
-        browserAllowedOrigins: string[];
-        browserFullCdp: boolean;
-      }>;
-      setLocalTools(prefs: {
-        browser: boolean;
-        computer: boolean;
-        search: boolean;
-        ocr: boolean;
-        searchProvider: 'auto' | 'deepseek' | 'local';
-        computerAllowedApps: string[];
-        browserOriginPolicy: 'any' | 'allowlist';
-        browserAllowedOrigins: string[];
-        browserFullCdp: boolean;
-      }): Promise<{
-        browser: boolean;
-        computer: boolean;
-        search: boolean;
-        ocr: boolean;
-        searchProvider: 'auto' | 'deepseek' | 'local';
-        computerAllowedApps: string[];
-        browserOriginPolicy: 'any' | 'allowlist';
-        browserAllowedOrigins: string[];
-        browserFullCdp: boolean;
-      }>;
+      localToolsStatus(): Promise<LocalToolsPrefs>;
+      setLocalTools(prefs: LocalToolsPrefs): Promise<LocalToolsPrefs>;
+      getCurrentComputerApp(): Promise<ComputerApp | null>;
+      listComputerApps(): Promise<ComputerApp[]>;
+      allowComputerApp(appId: string): Promise<LocalToolsPrefs>;
       ocrFile(payload: {
         path: string;
         purpose?: 'text_recognition' | 'rich_layout_recognition';
