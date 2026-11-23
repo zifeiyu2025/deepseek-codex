@@ -163,6 +163,11 @@ function subagentStatusLabel(status: unknown) {
   return '未知';
 }
 
+function isRunningSubagent(status: unknown) {
+  if (typeof status === 'string') return /running|active/i.test(status);
+  return Boolean(status && typeof status === 'object' && 'active' in status);
+}
+
 function loadSettings(): RuntimeSettings {
   const saved = readJsonStorage<Partial<RuntimeSettings> | null>(
     'deepseek-codex.settings',
@@ -3003,6 +3008,37 @@ export default function App() {
     return [...map.values()];
   }, [items, threadId]);
 
+  const stopAllSubagents = useCallback(async () => {
+    const running = subagents.filter((agent) => isRunningSubagent(agent.status));
+    if (!running.length) {
+      setNotice('没有正在运行的子代理');
+      return;
+    }
+    let stopped = 0;
+    for (const agent of running) {
+      try {
+        const read = await window.codex.request('thread/read', {
+          threadId: agent.id,
+          includeTurns: true,
+        });
+        const turns = read?.thread?.turns || [];
+        const activeTurn = [...turns]
+          .reverse()
+          .find((turn: any) => turn.status === 'inProgress' || turn.status === 'in_progress');
+        if (activeTurn?.id) {
+          await window.codex.request('turn/interrupt', {
+            threadId: agent.id,
+            turnId: activeTurn.id,
+          });
+          stopped += 1;
+        }
+      } catch {
+        /* keep stopping the rest */
+      }
+    }
+    setNotice(stopped > 0 ? `已停止 ${stopped} 个子代理` : '没有可中断的子代理');
+  }, [subagents]);
+
   const runSlashCommand = useCallback(
     (id: SlashCommandId, argument?: string) => {
       const activeThread =
@@ -3681,7 +3717,8 @@ export default function App() {
           ocrBusy={ocrBusy}
           onKeyDown={onKeyDown}
           onOpenGoal={() => openGoalDialog()}
-          onOpenSubagents={() => setSubagentPanelOpen(true)}
+          onOpenSubagent={openSubagent}
+          onStopAllSubagents={() => void stopAllSubagents()}
           onSlashCommand={runSlashCommand}
           openCapabilities={openCapabilities}
           openSettings={openSettings}
@@ -4645,7 +4682,9 @@ export default function App() {
       {subagentPanelOpen ? (
         <Modal onClose={() => setSubagentPanelOpen(false)} labelledBy="subagent-panel-title">
           <div className="key-card subagent-card">
-            <div className="key-kicker">SUBAGENTS</div>
+            <div className="key-kicker">
+              SUBAGENTS · Active {subagents.filter((agent) => isRunningSubagent(agent.status)).length}
+            </div>
             <h2 id="subagent-panel-title">子代理</h2>
             <p>当前会话派生的子代理；打开会切换到对应线程。</p>
             <div className="subagent-list">

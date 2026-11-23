@@ -50,6 +50,25 @@ import type {
 import { effortLabel } from '../lib/format';
 import { writeStorage } from '../lib/storage';
 
+function subagentStateLabel(status: unknown) {
+  const value =
+    typeof status === 'string'
+      ? status.toLowerCase()
+      : status && typeof status === 'object' && 'active' in status
+        ? 'running'
+        : '';
+  const labels: Record<string, string> = {
+    running: '正在工作',
+    active: '正在工作',
+    completed: '已完成',
+    waiting: '等待指令',
+    failed: '失败',
+    errored: '失败',
+    interrupted: '已中断',
+  };
+  return labels[value] || (typeof status === 'string' ? status : '未知');
+}
+
 export function Composer({
   activeCwd,
   activeModel,
@@ -76,7 +95,8 @@ export function Composer({
   ocrBusy,
   onKeyDown,
   onOpenGoal,
-  onOpenSubagents,
+  onOpenSubagent,
+  onStopAllSubagents,
   onSlashCommand,
   openCapabilities,
   openSettings,
@@ -133,7 +153,8 @@ export function Composer({
   ocrBusy: boolean;
   onKeyDown: (event: ReactKeyboardEvent<HTMLTextAreaElement>) => void;
   onOpenGoal: () => void;
-  onOpenSubagents: () => void;
+  onOpenSubagent: (agent: ThreadSummary) => void;
+  onStopAllSubagents: () => void;
   onSlashCommand: (id: SlashCommandId, argument?: string) => void;
   openCapabilities: () => void;
   openSettings: () => void;
@@ -169,6 +190,7 @@ export function Composer({
 }) {
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
+  const [agentsExpanded, setAgentsExpanded] = useState(false);
   const goalStatusLabels: Record<string, string> = {
     active: '进行中',
     paused: '已暂停',
@@ -546,12 +568,53 @@ export function Composer({
               </div>
             ) : null}
             {subagents.length > 0 ? (
-              <button type="button" className="composer-agents" onClick={onOpenSubagents}>
-                <Users size={13} />
-                <span>{subagents.length} 个子代理</span>
-                <small>{activeSubagents > 0 ? `${activeSubagents} 个运行中` : '最近活动'}</small>
-                <ChevronRight size={12} />
-              </button>
+              <div className="composer-agents-panel">
+                <div className="composer-agents">
+                  <button
+                    type="button"
+                    className="composer-agents-summary"
+                    onClick={() => setAgentsExpanded((previous) => !previous)}
+                  >
+                    <Users size={13} />
+                    <span>{subagents.length} 个后台子代理</span>
+                    <small>
+                      {activeSubagents > 0 ? `${activeSubagents} 个正在工作` : '最近活动'}
+                    </small>
+                    {agentsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  </button>
+                  <button
+                    type="button"
+                    className="composer-agents-stop"
+                    onClick={onStopAllSubagents}
+                    disabled={activeSubagents === 0}
+                    title="停止此会话中的所有子代理"
+                  >
+                    全部停止
+                  </button>
+                </div>
+                {agentsExpanded ? (
+                  <div className="composer-agent-list">
+                    {subagents.map((agent) => (
+                      <button
+                        type="button"
+                        className="composer-agent-row"
+                        key={agent.id}
+                        onClick={() => onOpenSubagent(agent)}
+                        title={agent.model ? `使用 ${agent.model}` : agent.id}
+                      >
+                        <span className="agent-name">
+                          {agent.agentNickname ||
+                            agent.name ||
+                            agent.preview?.slice(0, 60) ||
+                            agent.id.slice(0, 8)}
+                        </span>
+                        <span className="agent-state">{subagentStateLabel(agent.status)}</span>
+                        <small>{agent.model ? `使用 ${agent.model}` : ''}</small>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             ) : null}
             {goal ? (
               <button
