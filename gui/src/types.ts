@@ -246,11 +246,12 @@ declare global {
       showInFolder(targetPath: string): Promise<boolean>;
       openPath(targetPath: string): Promise<string>;
       restartEngine(): Promise<boolean>;
-      localToolsStatus(): Promise<{ browser: boolean; computer: boolean }>;
+      localToolsStatus(): Promise<{ browser: boolean; computer: boolean; search: boolean }>;
       setLocalTools(prefs: {
         browser: boolean;
         computer: boolean;
-      }): Promise<{ browser: boolean; computer: boolean }>;
+        search: boolean;
+      }): Promise<{ browser: boolean; computer: boolean; search: boolean }>;
       gitInfo(targetPath: string): Promise<{
         repo: boolean;
         root?: string;

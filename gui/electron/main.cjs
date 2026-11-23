@@ -198,12 +198,13 @@ function localMcpScriptPath() {
 }
 
 function readLocalToolsPrefs() {
-  const fallback = { browser: false, computer: false };
+  const fallback = { browser: false, computer: false, search: false };
   try {
     const saved = JSON.parse(fs.readFileSync(localToolsPrefsFile(), 'utf8'));
     return {
       browser: Boolean(saved?.browser),
       computer: Boolean(saved?.computer),
+      search: Boolean(saved?.search),
     };
   } catch {
     return fallback;
@@ -211,7 +212,7 @@ function readLocalToolsPrefs() {
 }
 
 function localMcpServerConfig(prefs) {
-  if (!prefs.browser && !prefs.computer) return null;
+  if (!prefs.browser && !prefs.computer && !prefs.search) return null;
   return {
     command: process.execPath,
     args: [localMcpScriptPath()],
@@ -220,6 +221,7 @@ function localMcpServerConfig(prefs) {
       SHANUI_BRIDGE_FILE: browserBridgeFile(),
       SHANUI_ENABLE_BROWSER: prefs.browser ? '1' : '0',
       SHANUI_ENABLE_COMPUTER: prefs.computer ? '1' : '0',
+      SHANUI_ENABLE_WEB_SEARCH: prefs.search ? '1' : '0',
     },
     default_tools_approval_mode: 'prompt',
     tool_timeout_sec: 60,
@@ -669,21 +671,118 @@ async function guestPressKey(guest, key) {
   await guestInput(guest, 'Input.dispatchKeyEvent', { type: 'keyUp', ...base });
 }
 
+async function navigateBrowserGuest(guest, raw) {
+  let parsed;
+  try {
+    parsed = new URL(typeof raw === 'string' ? raw.trim() : '');
+  } catch {
+    throw new Error('无效 URL');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('仅允许 http/https 地址');
+  }
+  await guest.loadURL(parsed.toString());
+  return parsed.toString();
+}
+
 async function handleBrowserTool(tool, args) {
   const guest = await ensureBrowserGuest();
-  if (tool === 'browser_navigate') {
+  if (tool === 'open_browser') {
     const raw = typeof args?.url === 'string' ? args.url.trim() : '';
-    let parsed;
-    try {
-      parsed = new URL(raw);
-    } catch {
-      throw new Error('无效 URL');
+    if (!raw) {
+      let current = '';
+      try {
+        current = guest.getURL() || '';
+      } catch {
+        /* guest may not have navigated yet */
+      }
+      return { type: 'text', text: `内置浏览器已打开${current ? `：${current}` : ''}` };
     }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error('仅允许 http/https 地址');
-    }
-    await guest.loadURL(parsed.toString());
-    return { type: 'text', text: `已导航到 ${parsed.toString()}` };
+    const url = await navigateBrowserGuest(guest, raw);
+    return { type: 'text', text: `已打开内置浏览器：${url}` };
+  }
+  if (tool === 'web_search') {
+    const query = typeof args?.query === 'string' ? args.query.trim() : '';
+    if (!query) throw new Error('缺少搜索关键词');
+    const limit = Math.max(1, Math.min(10, Number(args?.count) || 6));
+    await navigateBrowserGuest(
+      guest,
+      `https://cn.bing.com/search?setlang=zh-Hans&q=${encodeURIComponent(query)}`,
+    );
+    const data = await guest.executeJavaScript(
+      `(() => {
+        const limit = ${limit};
+        const blocks = [...document.querySelectorAll('li.b_algo, div.result, div.c-container, div.vrwrap')];
+        const results = [];
+        const seen = new Set();
+        for (const block of blocks) {
+          if (results.length >= limit) break;
+          const link = block.querySelector('h2 a, h3 a');
+          if (!link) continue;
+          const href = link.href || '';
+          if (!/^https?:/i.test(href) || seen.has(href)) continue;
+          const title = ((link.innerText || link.textContent || '') + '').replace(/\\s+/g, ' ').trim();
+          if (!title) continue;
+          const snippetEl = block.querySelector('.b_caption p, .b_lineclamp1, .b_lineclamp2, .b_lineclamp3, .c-abstract, .str_info, .str-text, [class*="summary"], [class*="desc"]');
+          const snippet = (snippetEl ? snippetEl.innerText || '' : (block.innerText || '').replace(title, ''))
+            .replace(/\\s+/g, ' ')
+            .trim()
+            .slice(0, 300);
+          seen.add(href);
+          results.push({ title: title.slice(0, 200), url: href, snippet });
+        }
+        return { title: document.title, url: location.href, results };
+      })()`,
+      true,
+    );
+    if (!data?.results?.length) throw new Error('未找到搜索结果');
+    return {
+      type: 'text',
+      text: JSON.stringify({ query, engine: 'bing', results: data.results }, null, 2),
+    };
+  }
+  if (tool === 'web_fetch') {
+    const raw = typeof args?.url === 'string' ? args.url.trim() : '';
+    if (!raw) throw new Error('缺少目标 URL');
+    const maxChars = Math.max(1000, Math.min(30000, Number(args?.maxChars) || 12000));
+    const url = await navigateBrowserGuest(guest, raw);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const data = await guest.executeJavaScript(
+      `(() => {
+        const maxChars = ${maxChars};
+        const candidates = [...document.querySelectorAll('article, main, [role="main"]')];
+        candidates.push(document.body);
+        const root = candidates
+          .filter(Boolean)
+          .sort((a, b) => ((b.innerText || '').length - (a.innerText || '').length))[0];
+        if (!root) return { title: document.title, url: location.href, description: '', content: '' };
+        const clone = root.cloneNode(true);
+        clone.querySelectorAll('script, style, noscript, svg, canvas, iframe, header, nav, footer, aside, form, button').forEach((el) => el.remove());
+        const content = (clone.innerText || clone.textContent || '')
+          .replace(/\\r/g, '')
+          .replace(/[ \\t]+/g, ' ')
+          .replace(/\\n{3,}/g, '\\n\\n')
+          .trim()
+          .slice(0, maxChars);
+        const description = document.querySelector('meta[name="description"]')?.content || '';
+        return {
+          title: document.title,
+          url: location.href,
+          description: (description + '').replace(/\\s+/g, ' ').trim().slice(0, 300),
+          content,
+        };
+      })()`,
+      true,
+    );
+    if (!data?.content) throw new Error('页面没有可读取的正文');
+    return {
+      type: 'text',
+      text: JSON.stringify({ ...data, requestedUrl: url }, null, 2),
+    };
+  }
+  if (tool === 'browser_navigate') {
+    const url = await navigateBrowserGuest(guest, args?.url);
+    return { type: 'text', text: `已导航到 ${url}` };
   }
   if (tool === 'browser_snapshot') {
     const data = await guest.executeJavaScript(
@@ -1607,6 +1706,7 @@ handleIpc('app:set-local-tools', async (_event, payload) => {
   const prefs = {
     browser: Boolean(payload?.browser),
     computer: Boolean(payload?.computer),
+    search: Boolean(payload?.search),
   };
   fs.mkdirSync(path.dirname(localToolsPrefsFile()), { recursive: true });
   fs.writeFileSync(localToolsPrefsFile(), JSON.stringify(prefs));

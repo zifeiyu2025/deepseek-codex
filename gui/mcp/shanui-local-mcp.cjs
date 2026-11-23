@@ -8,6 +8,7 @@ const bridgeFile =
   process.env.SHANUI_BRIDGE_FILE || path.join(os.homedir(), '.codex', 'shanui-bridge.json');
 const enableBrowser = process.env.SHANUI_ENABLE_BROWSER === '1';
 const enableComputer = process.env.SHANUI_ENABLE_COMPUTER === '1';
+const enableWebSearch = process.env.SHANUI_ENABLE_WEB_SEARCH === '1';
 
 function log(message) {
   process.stderr.write(`[shanui-local-mcp] ${message}\n`);
@@ -246,6 +247,15 @@ Write-Output ([pscustomobject]@{title=$buffer.ToString();processId=$processId;pr
 
 const browserTools = [
   {
+    name: 'open_browser',
+    description:
+      'Open the in-app browser panel beside the conversation, optionally navigating to a URL.',
+    inputSchema: {
+      type: 'object',
+      properties: { url: { type: 'string', description: 'Optional absolute http(s) URL' } },
+    },
+  },
+  {
     name: 'browser_navigate',
     description: 'Navigate the in-app browser. Only http/https URLs are allowed.',
     inputSchema: {
@@ -345,6 +355,35 @@ const browserTools = [
   },
 ];
 
+const searchTools = [
+  {
+    name: 'web_search',
+    description:
+      'Search the public web in the in-app browser with Bing and return result titles, URLs, and snippets. Use web_fetch to read a result.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search keywords' },
+        count: { type: 'number', description: 'Number of results, 1-10; defaults to 6' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'web_fetch',
+    description:
+      'Open a public web page in the in-app browser and return its title, URL, description, and main text content.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Absolute http(s) URL' },
+        maxChars: { type: 'number', description: 'Maximum content characters, 1000-30000; defaults to 12000' },
+      },
+      required: ['url'],
+    },
+  },
+];
+
 const computerTools = [
   {
     name: 'computer_screenshot',
@@ -410,6 +449,11 @@ const computerTools = [
 ];
 
 async function callTool(name, args) {
+  if (name === 'web_search' || name === 'web_fetch') {
+    if (!enableWebSearch) throw new Error('网页搜索未启用');
+    const result = await bridgeRequest(name, args || {});
+    return { content: [{ type: 'text', text: result.text || '' }] };
+  }
   if (name.startsWith('browser_')) {
     if (!enableBrowser) throw new Error('浏览器控制未启用');
     const result = await bridgeRequest(name, args || {});
@@ -419,6 +463,11 @@ async function callTool(name, args) {
           ? [{ type: 'image', data: result.data, mimeType: result.mimeType || 'image/png' }]
           : [{ type: 'text', text: result.text || '' }],
     };
+  }
+  if (name === 'open_browser') {
+    if (!enableBrowser) throw new Error('浏览器控制未启用');
+    const result = await bridgeRequest(name, args || {});
+    return { content: [{ type: 'text', text: result.text || '' }] };
   }
   if (name.startsWith('computer_')) {
     if (!enableComputer) throw new Error('电脑控制未启用');
@@ -448,7 +497,11 @@ async function callTool(name, args) {
   throw new Error(`未知工具：${name}`);
 }
 
-const tools = [...(enableBrowser ? browserTools : []), ...(enableComputer ? computerTools : [])];
+const tools = [
+  ...(enableBrowser ? browserTools : []),
+  ...(enableWebSearch ? searchTools : []),
+  ...(enableComputer ? computerTools : []),
+];
 
 function handle(message) {
   if (!message || message.jsonrpc !== '2.0') return;

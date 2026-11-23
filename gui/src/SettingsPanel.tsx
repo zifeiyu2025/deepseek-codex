@@ -58,9 +58,11 @@ export function SettingsPanel({
   }, [onClose]);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxSetupMessage, setSandboxSetupMessage] = useState<string | null>(null);
-  const [localTools, setLocalTools] = useState<{ browser: boolean; computer: boolean } | null>(
-    null,
-  );
+  const [localTools, setLocalTools] = useState<{
+    browser: boolean;
+    computer: boolean;
+    search: boolean;
+  } | null>(null);
   const [localToolsBusy, setLocalToolsBusy] = useState(false);
   const approvals: { value: RuntimeSettings['approvalPolicy']; title: string; description: string }[] = [
     { value: 'on-request', title: '按需确认', description: '只在需要越权或执行敏感操作时询问' },
@@ -104,10 +106,14 @@ export function SettingsPanel({
     window.codex
       .localToolsStatus()
       .then(setLocalTools)
-      .catch(() => setLocalTools({ browser: false, computer: false }));
+      .catch(() => setLocalTools({ browser: false, computer: false, search: false }));
   }, [tab]);
 
-  const updateLocalTools = async (patch: Partial<{ browser: boolean; computer: boolean }>) => {
+  const updateLocalTools = async (patch: Partial<{
+    browser: boolean;
+    computer: boolean;
+    search: boolean;
+  }>) => {
     if (!localTools || localToolsBusy) return;
     setLocalToolsBusy(true);
     try {
@@ -426,6 +432,21 @@ export function SettingsPanel({
             </div>
             <div className="setting-row">
               <div className="setting-row-text">
+                <strong>网页搜索与读取</strong>
+                <span>允许 AI 使用必应搜索公开网页，并读取结果页正文</span>
+              </div>
+              <button
+                className={`switch ${localTools?.search ? 'on' : ''}`}
+                role="switch"
+                aria-checked={Boolean(localTools?.search)}
+                disabled={!localTools || localToolsBusy}
+                onClick={() => void updateLocalTools({ search: !localTools?.search })}
+              >
+                <span />
+              </button>
+            </div>
+            <div className="setting-row">
+              <div className="setting-row-text">
                 <strong>电脑控制</strong>
                 <span>允许 AI 截屏并使用鼠标、键盘操作本机窗口</span>
               </div>
@@ -440,7 +461,7 @@ export function SettingsPanel({
               </button>
             </div>
             <div className="setting-note">
-              每次工具调用仍需在对话中确认；新建会话后生效。浏览器控制只作用于内置 Browser 面板；电脑控制仅在本机、仅在你明确授权的任务中使用。
+              每次工具调用仍需在对话中确认；新建会话后生效。浏览器控制只作用于内置 Browser 面板；网页搜索与读取会打开 Browser 面板；电脑控制仅在本机、仅在你明确授权的任务中使用。
             </div>
           </div>
           <div className="setting-group">
