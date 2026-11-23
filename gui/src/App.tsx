@@ -205,6 +205,11 @@ export default function App() {
   const [turnId, setTurnId] = useState<string | null>(null);
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
   const [pendingInput, setPendingInput] = useState<PendingUserInput | null>(null);
+  const [mcpElicitation, setMcpElicitation] = useState<{
+    id: number | string;
+    serverName?: string;
+    message: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [keyDialog, setKeyDialog] = useState(false);
@@ -1418,6 +1423,17 @@ export default function App() {
         });
         return;
       }
+      if (request.method === 'mcpServer/elicitation/request') {
+        setMcpElicitation({
+          id: request.id,
+          serverName: request.params?.serverName,
+          message:
+            request.params?.message ||
+            request.params?.request?.message ||
+            '允许这次 MCP 工具调用？',
+        });
+        return;
+      }
       window.codex.respond(request.id, undefined, {
         code: -32601,
         message: `客户端暂不支持：${request.method}`,
@@ -1474,6 +1490,15 @@ export default function App() {
     element.style.height = 'auto';
     element.style.height = `${Math.min(element.scrollHeight, 180)}px`;
   }, [input]);
+
+  const respondMcpElicitation = useCallback(
+    (action: 'accept' | 'decline' | 'cancel') => {
+      if (!mcpElicitation) return;
+      setMcpElicitation(null);
+      window.codex.respond(mcpElicitation.id, { action, content: null, meta: null });
+    },
+    [mcpElicitation],
+  );
 
   const decide = useCallback(
     (decision: string) => {
@@ -1561,6 +1586,13 @@ export default function App() {
 
   useEffect(() => {
     window.codex.rendererReady();
+  }, []);
+
+  useEffect(() => {
+    return window.codex.onBrowserOpen(() => {
+      setRailTab('browser');
+      setRailOpen(true);
+    });
   }, []);
 
   useEffect(() => {
@@ -3369,6 +3401,29 @@ export default function App() {
           onStart={startReview}
           onClose={() => setReviewDialogOpen(false)}
         />
+      ) : null}
+
+      {mcpElicitation ? (
+        <Modal
+          onClose={() => respondMcpElicitation('cancel')}
+          labelledBy="mcp-approval-title"
+        >
+          <div className="key-card">
+            <div className="key-kicker">MCP TOOL</div>
+            <h2 id="mcp-approval-title">
+              {mcpElicitation.serverName
+                ? `允许 ${mcpElicitation.serverName} 执行操作？`
+                : '允许这次操作？'}
+            </h2>
+            <p>{mcpElicitation.message}</p>
+            <div className="key-actions">
+              <button onClick={() => respondMcpElicitation('decline')}>拒绝</button>
+              <button className="primary" onClick={() => respondMcpElicitation('accept')}>
+                允许
+              </button>
+            </div>
+          </div>
+        </Modal>
       ) : null}
 
       {pendingInput ? (

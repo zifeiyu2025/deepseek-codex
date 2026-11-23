@@ -58,6 +58,10 @@ export function SettingsPanel({
   }, [onClose]);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxSetupMessage, setSandboxSetupMessage] = useState<string | null>(null);
+  const [localTools, setLocalTools] = useState<{ browser: boolean; computer: boolean } | null>(
+    null,
+  );
+  const [localToolsBusy, setLocalToolsBusy] = useState(false);
   const approvals: { value: RuntimeSettings['approvalPolicy']; title: string; description: string }[] = [
     { value: 'on-request', title: '按需确认', description: '只在需要越权或执行敏感操作时询问' },
     { value: 'untrusted', title: '全部确认', description: '每个命令与修改都需要你确认' },
@@ -94,6 +98,28 @@ export function SettingsPanel({
       void loadFeatures();
     }
   }, [features.length, featuresLoading, loadFeatures, tab]);
+
+  useEffect(() => {
+    if (tab !== 'features') return;
+    window.codex
+      .localToolsStatus()
+      .then(setLocalTools)
+      .catch(() => setLocalTools({ browser: false, computer: false }));
+  }, [tab]);
+
+  const updateLocalTools = async (patch: Partial<{ browser: boolean; computer: boolean }>) => {
+    if (!localTools || localToolsBusy) return;
+    setLocalToolsBusy(true);
+    try {
+      const saved = await window.codex.setLocalTools({ ...localTools, ...patch });
+      setLocalTools(saved);
+      setSettingsNotice('本地 AI 工具已更新；引擎已重启，请新建会话后使用。');
+    } catch (error: any) {
+      setSettingsNotice(friendlyClientError(error));
+    } finally {
+      setLocalToolsBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (tab !== 'diagnostics' || sandboxReadiness !== null) return;
@@ -381,6 +407,42 @@ export function SettingsPanel({
         </div>
 
         <div className={tab === 'features' ? 'settings-pane' : 'settings-pane hidden'}>
+          <div className="setting-group">
+            <div className="setting-label">本地 AI 工具</div>
+            <div className="setting-row">
+              <div className="setting-row-text">
+                <strong>浏览器控制</strong>
+                <span>允许 AI 打开并操作内置浏览器中的页面、读取内容与截图</span>
+              </div>
+              <button
+                className={`switch ${localTools?.browser ? 'on' : ''}`}
+                role="switch"
+                aria-checked={Boolean(localTools?.browser)}
+                disabled={!localTools || localToolsBusy}
+                onClick={() => void updateLocalTools({ browser: !localTools?.browser })}
+              >
+                <span />
+              </button>
+            </div>
+            <div className="setting-row">
+              <div className="setting-row-text">
+                <strong>电脑控制</strong>
+                <span>允许 AI 截屏并使用鼠标、键盘操作本机窗口</span>
+              </div>
+              <button
+                className={`switch ${localTools?.computer ? 'on' : ''}`}
+                role="switch"
+                aria-checked={Boolean(localTools?.computer)}
+                disabled={!localTools || localToolsBusy}
+                onClick={() => void updateLocalTools({ computer: !localTools?.computer })}
+              >
+                <span />
+              </button>
+            </div>
+            <div className="setting-note">
+              每次工具调用仍需在对话中确认；启用后引擎会重启，新建会话后生效。浏览器控制只作用于内置 Browser 面板；电脑控制仅在本机、仅在你明确授权的任务中使用。
+            </div>
+          </div>
           <div className="setting-group">
             <div className="setting-label">实验功能</div>
             {featuresLoading ? (

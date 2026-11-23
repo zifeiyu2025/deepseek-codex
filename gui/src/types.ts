@@ -246,6 +246,11 @@ declare global {
       showInFolder(targetPath: string): Promise<boolean>;
       openPath(targetPath: string): Promise<string>;
       restartEngine(): Promise<boolean>;
+      localToolsStatus(): Promise<{ browser: boolean; computer: boolean }>;
+      setLocalTools(prefs: {
+        browser: boolean;
+        computer: boolean;
+      }): Promise<{ browser: boolean; computer: boolean }>;
       gitInfo(targetPath: string): Promise<{
         repo: boolean;
         root?: string;
@@ -298,6 +303,7 @@ declare global {
       onServerRequest(callback: (request: ServerRequest) => void): () => void;
       onStatus(callback: (status: { online: boolean; error?: string | null }) => void): () => void;
       onTrayAction(callback: (action: string) => void): () => void;
+      onBrowserOpen(callback: () => void): () => void;
     };
   }
 }

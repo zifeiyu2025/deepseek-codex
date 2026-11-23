@@ -12,7 +12,9 @@ const {
   nativeImage,
 } = require('electron');
 const { spawn, execFile, spawnSync } = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -110,6 +112,10 @@ const MAX_SERVER_LOG_CHARS = 256 * 1024;
 let serverLogChars = 0;
 const terminals = new Map();
 let terminalSeq = 0;
+let browserGuest = null;
+let browserWaiters = [];
+let browserBridge = null;
+let browserBridgeToken = '';
 
 const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 
@@ -176,6 +182,29 @@ process.on('unhandledRejection', (reason) => {
 
 function apiKeyFile() {
   return path.join(app.getPath('userData'), 'deepseek.key');
+}
+
+function localToolsPrefsFile() {
+  return path.join(app.getPath('userData'), 'ai-tools.json');
+}
+
+function localMcpScriptPath() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'mcp', 'shanui-local-mcp.cjs')
+    : path.join(ROOT, 'mcp', 'shanui-local-mcp.cjs');
+}
+
+function readLocalToolsPrefs() {
+  const fallback = { browser: false, computer: false };
+  try {
+    const saved = JSON.parse(fs.readFileSync(localToolsPrefsFile(), 'utf8'));
+    return {
+      browser: Boolean(saved?.browser),
+      computer: Boolean(saved?.computer),
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 async function loadApiKey() {
@@ -532,6 +561,238 @@ function flushRendererMessages() {
 
 function broadcastStatus() {
   sendToRenderer('app:status', { online, error: lastError });
+}
+
+function browserBridgeFile() {
+  return path.join(codexHome, 'shanui-bridge.json');
+}
+
+function attachBrowserGuest(contents) {
+  browserGuest = contents;
+  contents.once('destroyed', () => {
+    if (browserGuest === contents) browserGuest = null;
+  });
+  const waiters = browserWaiters;
+  browserWaiters = [];
+  for (const resolve of waiters) resolve();
+}
+
+async function ensureBrowserGuest() {
+  if (browserGuest && !browserGuest.isDestroyed()) return browserGuest;
+  sendToRenderer('browser:open');
+  if (browserGuest && !browserGuest.isDestroyed()) return browserGuest;
+  await new Promise((resolve, reject) => {
+    const finish = () => {
+      clearTimeout(timer);
+      browserWaiters = browserWaiters.filter((entry) => entry !== finish);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      browserWaiters = browserWaiters.filter((entry) => entry !== finish);
+      reject(new Error('浏览器面板未能打开'));
+    }, 10000);
+    browserWaiters.push(finish);
+  });
+  if (!browserGuest || browserGuest.isDestroyed()) throw new Error('浏览器面板未就绪');
+  return browserGuest;
+}
+
+async function handleBrowserTool(tool, args) {
+  const guest = await ensureBrowserGuest();
+  if (tool === 'browser_navigate') {
+    const raw = typeof args?.url === 'string' ? args.url.trim() : '';
+    let parsed;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      throw new Error('无效 URL');
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('仅允许 http/https 地址');
+    }
+    await guest.loadURL(parsed.toString());
+    return { type: 'text', text: `已导航到 ${parsed.toString()}` };
+  }
+  if (tool === 'browser_snapshot') {
+    const data = await guest.executeJavaScript(
+      `(() => {
+        const text = (document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
+        const elements = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[contenteditable="true"]')]
+          .slice(0, 100)
+          .map((el, index) => ({
+            index,
+            tag: el.tagName.toLowerCase(),
+            type: el.getAttribute('type') || null,
+            text: ((el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.name || '') + '').trim().slice(0, 120),
+            selector: el.id ? '#' + CSS.escape(el.id) : null,
+          }));
+        return { title: document.title, url: location.href, text: text.slice(0, 12000), elements };
+      })()`,
+      true,
+    );
+    return { type: 'text', text: JSON.stringify(data, null, 2) };
+  }
+  if (tool === 'browser_click') {
+    const spec = JSON.stringify({
+      selector: typeof args?.selector === 'string' ? args.selector : null,
+      text: typeof args?.text === 'string' ? args.text : null,
+    });
+    const result = await guest.executeJavaScript(
+      `(() => {
+        const spec = ${spec};
+        const candidates = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[contenteditable="true"]')];
+        let el = spec.selector ? document.querySelector(spec.selector) : null;
+        if (!el && spec.text) {
+          const wanted = spec.text.trim();
+          el = candidates.find((entry) => ((entry.innerText || entry.value || entry.getAttribute('aria-label') || '') + '').trim() === wanted)
+            || candidates.find((entry) => ((entry.innerText || entry.value || entry.getAttribute('aria-label') || '') + '').includes(wanted));
+        }
+        if (!el) throw new Error('未找到目标元素');
+        el.scrollIntoView({ block: 'center' });
+        el.click();
+        return { tag: el.tagName.toLowerCase(), text: ((el.innerText || el.value || el.getAttribute('aria-label') || '') + '').trim().slice(0, 120) };
+      })()`,
+      true,
+    );
+    return { type: 'text', text: `已点击 ${JSON.stringify(result)}` };
+  }
+  if (tool === 'browser_type') {
+    const spec = JSON.stringify({
+      selector: typeof args?.selector === 'string' ? args.selector : null,
+      text: typeof args?.text === 'string' ? args.text : '',
+      submit: Boolean(args?.submit),
+    });
+    await guest.executeJavaScript(
+      `(() => {
+        const spec = ${spec};
+        let el = spec.selector ? document.querySelector(spec.selector) : null;
+        if (!el && document.activeElement instanceof HTMLElement) el = document.activeElement;
+        if (!el) throw new Error('未找到输入元素');
+        el.focus();
+        if (el.isContentEditable) {
+          el.textContent = spec.text;
+        } else {
+          const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(el, spec.text); else el.value = spec.text;
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        if (spec.submit) {
+          if (el.form?.requestSubmit) el.form.requestSubmit();
+          else el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+        }
+        return true;
+      })()`,
+      true,
+    );
+    return { type: 'text', text: `已输入 ${args?.text?.length || 0} 个字符` };
+  }
+  if (tool === 'browser_scroll') {
+    const direction = args?.direction === 'up' ? -1 : 1;
+    const pages = Math.max(1, Math.min(10, Number(args?.pages) || 1));
+    await guest.executeJavaScript(`window.scrollBy(0, ${direction * pages * window.innerHeight * 0.85}); true`, true);
+    return { type: 'text', text: `已向${direction < 0 ? '上' : '下'}滚动 ${pages} 屏` };
+  }
+  if (tool === 'browser_back') {
+    if (guest.navigationHistory?.canGoBack()) guest.navigationHistory.goBack();
+    else guest.goBack();
+    return { type: 'text', text: '已后退' };
+  }
+  if (tool === 'browser_forward') {
+    if (guest.navigationHistory?.canGoForward()) guest.navigationHistory.goForward();
+    else guest.goForward();
+    return { type: 'text', text: '已前进' };
+  }
+  if (tool === 'browser_reload') {
+    guest.reload();
+    return { type: 'text', text: '已刷新页面' };
+  }
+  if (tool === 'browser_wait') {
+    const ms = Math.max(100, Math.min(10000, Number(args?.ms) || 1000));
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return { type: 'text', text: `已等待 ${ms}ms` };
+  }
+  if (tool === 'browser_screenshot') {
+    let image = await guest.capturePage();
+    if (image.isEmpty()) {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      image = await guest.capturePage();
+    }
+    if (image.isEmpty()) throw new Error('页面截图为空，请稍后重试');
+    return {
+      type: 'image',
+      mimeType: 'image/png',
+      data: image.toPNG().toString('base64'),
+    };
+  }
+  throw new Error(`未知浏览器工具：${tool}`);
+}
+
+function startBrowserBridge() {
+  if (browserBridge) return;
+  const token = crypto.randomBytes(32).toString('hex');
+  const server = http.createServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/command') {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    if (request.headers['x-shanui-token'] !== token) {
+      response.writeHead(403);
+      response.end();
+      return;
+    }
+    let body = '';
+    request.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > 2 * 1024 * 1024) request.destroy();
+    });
+    request.on('end', async () => {
+      try {
+        const payload = JSON.parse(body || '{}');
+        const result = await handleBrowserTool(payload.tool, payload.args || {});
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: true, result }));
+      } catch (error) {
+        response.writeHead(500, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: false, error: error?.message || String(error) }));
+      }
+    });
+  });
+  server.on('error', (error) => appendMainLog(`browser bridge error: ${error.message}`));
+  server.listen(0, '127.0.0.1', () => {
+    const address = server.address();
+    if (!address || typeof address === 'string') return;
+    try {
+      fs.mkdirSync(codexHome, { recursive: true });
+      fs.writeFileSync(browserBridgeFile(), JSON.stringify({ port: address.port, token }), {
+        mode: 0o600,
+      });
+      appendMainLog(`browser bridge listening on 127.0.0.1:${address.port}`);
+    } catch (error) {
+      appendMainLog(`browser bridge discovery failed: ${error?.message || error}`);
+    }
+  });
+  browserBridge = server;
+  browserBridgeToken = token;
+}
+
+function stopBrowserBridge() {
+  if (browserBridge) {
+    try {
+      browserBridge.close();
+    } catch {
+      /* ignore */
+    }
+    browserBridge = null;
+  }
+  browserBridgeToken = '';
+  try {
+    fs.unlinkSync(browserBridgeFile());
+  } catch {
+    /* ignore */
+  }
 }
 
 function clearEngineTimers() {
@@ -924,6 +1185,7 @@ function createWindow() {
       callback(false);
     });
     contents.session.setPermissionCheckHandler(() => false);
+    attachBrowserGuest(contents);
   });
   win.webContents.on('did-start-loading', () => {
     rendererReady = false;
@@ -1202,6 +1464,45 @@ handleIpc('app:open-path', async (_event, targetPath) => {
 handleIpc('app:restart-engine', async () => {
   await restartEngine();
   return true;
+});
+
+handleIpc('app:get-local-tools', () => readLocalToolsPrefs());
+
+handleIpc('app:set-local-tools', async (_event, payload) => {
+  const prefs = {
+    browser: Boolean(payload?.browser),
+    computer: Boolean(payload?.computer),
+  };
+  if (!rpc || !online) throw new Error('引擎未就绪，暂时无法安装本地 AI 工具');
+  const enabled = prefs.browser || prefs.computer;
+  const value = enabled
+    ? {
+        command: process.execPath,
+        args: [localMcpScriptPath()],
+        env: {
+          ELECTRON_RUN_AS_NODE: '1',
+          SHANUI_BRIDGE_FILE: browserBridgeFile(),
+          SHANUI_ENABLE_BROWSER: prefs.browser ? '1' : '0',
+          SHANUI_ENABLE_COMPUTER: prefs.computer ? '1' : '0',
+        },
+        default_tools_approval_mode: 'prompt',
+        tool_timeout_sec: 60,
+      }
+    : null;
+  await rpc.request('config/batchWrite', {
+    edits: [
+      {
+        keyPath: 'mcp_servers.shanui_local',
+        value,
+        mergeStrategy: 'replace',
+      },
+    ],
+    reloadUserConfig: true,
+  });
+  fs.mkdirSync(path.dirname(localToolsPrefsFile()), { recursive: true });
+  fs.writeFileSync(localToolsPrefsFile(), JSON.stringify(prefs));
+  await restartEngine();
+  return prefs;
 });
 
 handleIpc('app:git-info', async (_event, targetPath) => {
@@ -1843,6 +2144,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     app.setAppUserModelId('local.deepseek.codex');
     await loadApiKey();
+    startBrowserBridge();
     startEngine();
     createWindow();
     createTray();
@@ -1860,6 +2162,7 @@ if (!app.requestSingleInstanceLock()) {
     appendMainLog('app quitting');
     tray?.destroy();
     tray = null;
+    stopBrowserBridge();
     shutdownEngineNow();
     killAllTerminals();
   });

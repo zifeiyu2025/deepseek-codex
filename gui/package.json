@@ -1,6 +1,6 @@
 {
   "name": "deepseek-codex-gui",
-  "version": "0.45.19",
+  "version": "0.45.20",
   "private": true,
   "description": "Independent desktop GUI for the locally built Codex app-server, defaulting to DeepSeek.",
   "author": "local",
@@ -40,6 +40,10 @@
       {
         "from": "codex.exe",
         "to": "codex/codex.exe"
+      },
+      {
+        "from": "mcp",
+        "to": "mcp"
       }
     ],
     "asarUnpack": [

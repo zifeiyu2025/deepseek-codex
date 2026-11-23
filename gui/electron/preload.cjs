@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('codex', {
   showInFolder: (targetPath) => ipcRenderer.invoke('app:show-in-folder', targetPath),
   openPath: (targetPath) => ipcRenderer.invoke('app:open-path', targetPath),
   restartEngine: () => ipcRenderer.invoke('app:restart-engine'),
+  localToolsStatus: () => ipcRenderer.invoke('app:get-local-tools'),
+  setLocalTools: (prefs) => ipcRenderer.invoke('app:set-local-tools', prefs),
   gitInfo: (targetPath) => ipcRenderer.invoke('app:git-info', targetPath),
   listDir: (payload) => ipcRenderer.invoke('app:list-dir', payload),
   readFile: (payload) => ipcRenderer.invoke('app:read-file', payload),
@@ -48,6 +50,7 @@ contextBridge.exposeInMainWorld('codex', {
   onServerRequest: (callback) => subscribe('rpc:serverRequest', callback),
   onStatus: (callback) => subscribe('app:status', callback),
   onTrayAction: (callback) => subscribe('tray:action', callback),
+  onBrowserOpen: (callback) => subscribe('browser:open', callback),
 });
 
 contextBridge.exposeInMainWorld('desktop', {
