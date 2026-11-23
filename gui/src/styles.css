@@ -7969,3 +7969,30 @@ pre::-webkit-scrollbar-button,
   color: var(--faint);
   font-size: 9.5px;
 }
+
+.browser-history-row {
+  width: 100%;
+  border: 0;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.browser-history-row:hover {
+  background: #242428;
+  color: var(--ink);
+}
+
+.browser-history-more {
+  align-self: flex-start;
+  padding: 4px 6px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.browser-downloads-label {
+  margin-top: 14px;
+}

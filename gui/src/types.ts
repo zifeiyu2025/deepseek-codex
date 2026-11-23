@@ -361,6 +361,11 @@ declare global {
         }[]
       >;
       clearComputerHistory(): Promise<boolean>;
+      getDownloads(): Promise<
+        { name: string; url: string; path: string; state: string; size: number; at: number }[]
+      >;
+      clearDownloads(): Promise<boolean>;
+      showDownload(targetPath: string): Promise<boolean>;
       gitInfo(targetPath: string): Promise<{
         repo: boolean;
         root?: string;

@@ -76,6 +76,10 @@ export function SettingsPanel({
   const [browserHistory, setBrowserHistory] = useState<{ url: string; title: string; at: number }[]>(
     [],
   );
+  const [showAllHistory, setShowAllHistory] = useState(false);
+  const [downloads, setDownloads] = useState<
+    { name: string; url: string; path: string; state: string; size: number; at: number }[]
+  >([]);
   const [browserBusy, setBrowserBusy] = useState(false);
   const [computerHistory, setComputerHistory] = useState<
     { at: number; tool: string; args: Record<string, unknown>; ok: boolean; error?: string }[]
@@ -124,10 +128,14 @@ export function SettingsPanel({
     if (tab !== 'features') return;
     try {
       const parsed = JSON.parse(readStorage('deepseek-codex.browserHistory') || '[]');
-      setBrowserHistory(Array.isArray(parsed) ? parsed.slice(0, 20) : []);
+      setBrowserHistory(Array.isArray(parsed) ? parsed.slice(0, 100) : []);
     } catch {
       setBrowserHistory([]);
     }
+    window.codex
+      .getDownloads()
+      .then((list) => setDownloads(Array.isArray(list) ? list : []))
+      .catch(() => setDownloads([]));
     window.codex
       .getComputerHistory()
       .then((list) => setComputerHistory(Array.isArray(list) ? list : []))
@@ -207,6 +215,23 @@ export function SettingsPanel({
     } catch (error: any) {
       setSettingsNotice(friendlyClientError(error));
     }
+  };
+
+  const clearDownloadsLog = async () => {
+    try {
+      await window.codex.clearDownloads();
+      setDownloads([]);
+      setSettingsNotice('下载记录已清除');
+    } catch (error: any) {
+      setSettingsNotice(friendlyClientError(error));
+    }
+  };
+
+  const openHistoryUrl = (url: string) => {
+    window.dispatchEvent(
+      new CustomEvent('deepseek-codex:browser-open', { detail: { url } }),
+    );
+    onClose();
   };
 
   useEffect(() => {
@@ -578,12 +603,27 @@ export function SettingsPanel({
             </div>
             {browserHistory.length > 0 ? (
               <div className="browser-history-list">
-                {browserHistory.slice(0, 6).map((entry) => (
-                  <div className="browser-history-row" key={`${entry.url}-${entry.at}`}>
+                {(showAllHistory ? browserHistory : browserHistory.slice(0, 6)).map((entry) => (
+                  <button
+                    type="button"
+                    className="browser-history-row"
+                    key={`${entry.url}-${entry.at}`}
+                    onClick={() => openHistoryUrl(entry.url)}
+                    title={`在 Browser 打开 ${entry.url}`}
+                  >
                     <span>{entry.title || entry.url}</span>
-                    <small title={entry.url}>{entry.url}</small>
-                  </div>
+                    <small>{entry.url}</small>
+                  </button>
                 ))}
+                {browserHistory.length > 6 ? (
+                  <button
+                    type="button"
+                    className="browser-history-more"
+                    onClick={() => setShowAllHistory((value) => !value)}
+                  >
+                    {showAllHistory ? '收起历史' : `查看全部 ${browserHistory.length} 条`}
+                  </button>
+                ) : null}
               </div>
             ) : (
               <div className="cap-empty">暂无浏览记录</div>
@@ -597,6 +637,35 @@ export function SettingsPanel({
               </button>
               <button onClick={() => void clearBrowserData('cookies')} disabled={browserBusy}>
                 清除 Cookie 与站点数据
+              </button>
+            </div>
+            <div className="setting-label browser-downloads-label">最近下载</div>
+            {downloads.length > 0 ? (
+              <div className="browser-history-list">
+                {downloads.slice(0, 8).map((entry) => (
+                  <button
+                    type="button"
+                    className="browser-history-row"
+                    key={`${entry.path}-${entry.at}`}
+                    onClick={() => void window.codex.showDownload(entry.path)}
+                    title="在文件夹中显示"
+                  >
+                    <span>{entry.name}</span>
+                    <small>
+                      {entry.size >= 1024 * 1024
+                        ? `${(entry.size / 1024 / 1024).toFixed(1)} MB`
+                        : `${Math.max(1, Math.round(entry.size / 1024))} KB`}{' '}
+                      · {entry.state}
+                    </small>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="cap-empty">暂无下载</div>
+            )}
+            <div className="settings-inline-actions">
+              <button onClick={() => void clearDownloadsLog()} disabled={!downloads.length}>
+                清除下载记录
               </button>
             </div>
           </div>

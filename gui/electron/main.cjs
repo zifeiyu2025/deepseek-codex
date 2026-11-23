@@ -207,6 +207,53 @@ function computerHistoryFile() {
   return path.join(app.getPath('userData'), 'computer-history.json');
 }
 
+function downloadsFile() {
+  return path.join(app.getPath('userData'), 'browser-downloads.json');
+}
+
+function setupDownloadTracking() {
+  const browserSession = session.fromPartition('persist:shanui-browser');
+  browserSession.on('will-download', (_event, item) => {
+    const originalName = item.getFilename() || 'download';
+    const downloadsDir = app.getPath('downloads');
+    let target = path.join(downloadsDir, originalName);
+    let suffix = 1;
+    while (fs.existsSync(target)) {
+      const ext = path.extname(originalName);
+      const base = path.basename(originalName, ext);
+      target = path.join(downloadsDir, `${base} (${suffix++})${ext}`);
+    }
+    try {
+      item.setSavePath(target);
+    } catch {
+      /* keep the default save path */
+    }
+    item.once('done', (_doneEvent, state) => {
+      try {
+        let list = [];
+        try {
+          const parsed = JSON.parse(fs.readFileSync(downloadsFile(), 'utf8'));
+          if (Array.isArray(parsed)) list = parsed;
+        } catch {
+          list = [];
+        }
+        list.unshift({
+          name: path.basename(target),
+          url: item.getURL(),
+          path: target,
+          state,
+          size: item.getReceivedBytes(),
+          at: Date.now(),
+        });
+        fs.mkdirSync(path.dirname(downloadsFile()), { recursive: true });
+        fs.writeFileSync(downloadsFile(), JSON.stringify(list.slice(0, 100)));
+      } catch (error) {
+        appendMainLog(`download history failed: ${error?.message || error}`);
+      }
+    });
+  });
+}
+
 function readLocalToolsPrefs() {
   const fallback = {
     browser: false,
@@ -2164,6 +2211,33 @@ handleIpc('browser:activate', (_event, webContentsId) => {
   return true;
 });
 
+handleIpc('app:get-downloads', () => {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(downloadsFile(), 'utf8'));
+    return Array.isArray(parsed) ? parsed.slice(0, 100) : [];
+  } catch {
+    return [];
+  }
+});
+
+handleIpc('app:clear-downloads', () => {
+  try {
+    fs.rmSync(downloadsFile(), { force: true });
+  } catch {
+    /* ignore */
+  }
+  return true;
+});
+
+handleIpc('app:show-download', async (_event, targetPath) => {
+  if (typeof targetPath !== 'string' || !targetPath) throw new Error('无效路径');
+  const target = await realpathNearest(path.resolve(targetPath));
+  const root = await realpathNearest(app.getPath('downloads'));
+  if (!isPathInside(root, target)) throw new Error('下载路径不在允许范围');
+  shell.showItemInFolder(target);
+  return true;
+});
+
 handleIpc('app:get-computer-history', () => {
   try {
     const parsed = JSON.parse(fs.readFileSync(computerHistoryFile(), 'utf8'));
@@ -2850,6 +2924,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     app.setAppUserModelId('local.deepseek.codex');
     await loadApiKey();
+    setupDownloadTracking();
     startBrowserBridge();
     startEngine();
     createWindow();
