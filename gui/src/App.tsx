@@ -70,6 +70,11 @@ import { TerminalDock } from './TerminalDock';
 import { playCompletionChime } from './lib/audio';
 import { friendlyClientError } from './lib/errors';
 import {
+  buildRelayTurnText,
+  parseAgentMentionPrefix,
+  uniqueRelayTargets,
+} from './lib/mentions';
+import {
   approvalLabel,
   automationScheduleLabel,
   cleanSnippet,
@@ -2883,24 +2888,29 @@ export default function App() {
     }
     setError(null);
 
-    let relayName = '';
+    let relayNames: string[] = [];
     let turnText = text;
     if (!runningRef.current) {
-      const agentMention = /^@([^\s]+)\s+([\s\S]+)$/.exec(text);
-      const targetAgent = agentMention
-        ? subagentsRef.current.find(
-            (agent) =>
-              isRunningSubagent(agent.status) &&
-              agentDisplayName(agent).toLowerCase() === agentMention[1].toLowerCase(),
-          )
-        : null;
-      if (targetAgent && agentMention) {
+      const agentMention = parseAgentMentionPrefix(text);
+      const resolved = (agentMention?.names || []).map((name) =>
+        subagentsRef.current.find(
+          (agent) =>
+            isRunningSubagent(agent.status) &&
+            agentDisplayName(agent).toLowerCase() === name.toLowerCase(),
+        ),
+      );
+      if (agentMention && resolved.length && resolved.every(Boolean)) {
         if (subagentParentId) {
           setError('请先返回主会话，再 @ 子代理发送指令');
           return;
         }
-        relayName = agentDisplayName(targetAgent);
-        turnText = `请使用 collaboration.send_message 工具，把下面这条消息发送给子代理「${relayName}」（threadId: ${targetAgent.id}）：\n---\n${agentMention[2]}\n---\n发送后等待该子代理的回复，并把结果转述给我；不要自己直接完成这件事。`;
+        const targets = uniqueRelayTargets(
+          resolved
+            .filter((agent): agent is ThreadSummary => Boolean(agent))
+            .map((agent) => ({ id: agent.id, name: agentDisplayName(agent) })),
+        );
+        relayNames = targets.map((target) => target.name);
+        turnText = buildRelayTurnText(targets, agentMention.message);
       }
     }
 
@@ -3008,7 +3018,7 @@ export default function App() {
       setLastTurnId(turn?.turn?.id || null);
       setAttachments([]);
       setOcrAttachments([]);
-      if (relayName) setNotice(`已请求主代理转发给子代理 ${relayName}`);
+      if (relayNames.length) setNotice(`已请求主代理转发给子代理 ${relayNames.join('、')}`);
     } catch (sendError) {
       setRunning(false);
       pendingUserRef.current = null;
@@ -3170,27 +3180,40 @@ export default function App() {
       return;
     }
     let stopped = 0;
-    for (const agent of running) {
-      try {
-        const read = await window.codex.request('thread/read', {
-          threadId: agent.id,
-          includeTurns: true,
-        });
-        const turns = read?.thread?.turns || [];
-        const activeTurn = [...turns]
-          .reverse()
-          .find((turn: any) => turn.status === 'inProgress' || turn.status === 'in_progress');
-        if (activeTurn?.id) {
-          await window.codex.request('turn/interrupt', {
+    await Promise.allSettled(
+      running.map(async (agent) => {
+        let turns: any[] = [];
+        try {
+          const page = await window.codex.request('thread/turns/list', {
             threadId: agent.id,
-            turnId: activeTurn.id,
+            limit: 20,
+            sortDirection: 'desc',
+            itemsView: 'summary',
           });
-          stopped += 1;
+          turns = page?.data || [];
+        } catch {
+          try {
+            const read = await window.codex.request('thread/read', {
+              threadId: agent.id,
+              includeTurns: true,
+            });
+            turns = read?.thread?.turns || [];
+          } catch {
+            turns = [];
+          }
         }
-      } catch {
-        /* keep stopping the rest */
-      }
-    }
+        const activeTurn = turns.find(
+          (turn: any) =>
+            turn.status === 'inProgress' || turn.status === 'in_progress',
+        );
+        if (!activeTurn?.id) return;
+        await window.codex.request('turn/interrupt', {
+          threadId: agent.id,
+          turnId: activeTurn.id,
+        });
+        stopped += 1;
+      }),
+    );
     setNotice(stopped > 0 ? `已停止 ${stopped} 个子代理` : '没有可中断的子代理');
   }, [subagents]);
 
