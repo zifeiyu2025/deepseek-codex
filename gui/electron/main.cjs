@@ -672,6 +672,12 @@ async function guestPressKey(guest, key) {
 }
 
 async function navigateBrowserGuest(guest, raw) {
+  const url = parseHttpUrl(raw);
+  await guest.loadURL(url);
+  return url;
+}
+
+function parseHttpUrl(raw) {
   let parsed;
   try {
     parsed = new URL(typeof raw === 'string' ? raw.trim() : '');
@@ -681,35 +687,87 @@ async function navigateBrowserGuest(guest, raw) {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error('仅允许 http/https 地址');
   }
-  await guest.loadURL(parsed.toString());
   return parsed.toString();
 }
 
-async function handleBrowserTool(tool, args) {
-  const guest = await ensureBrowserGuest();
-  if (tool === 'open_browser') {
-    const raw = typeof args?.url === 'string' ? args.url.trim() : '';
-    if (!raw) {
-      let current = '';
-      try {
-        current = guest.getURL() || '';
-      } catch {
-        /* guest may not have navigated yet */
-      }
-      return { type: 'text', text: `内置浏览器已打开${current ? `：${current}` : ''}` };
+let webWorker = null;
+let webWorkerQueue = Promise.resolve();
+let webWorkerIdleTimer = null;
+
+function ensureWebWorker() {
+  if (webWorker && !webWorker.isDestroyed()) return webWorker;
+  const worker = new BrowserWindow({
+    show: false,
+    width: 1280,
+    height: 900,
+    skipTaskbar: true,
+    webPreferences: {
+      partition: 'persist:shanui-web-tools',
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: false,
+      spellcheck: false,
+      backgroundThrottling: false,
+    },
+  });
+  worker.webContents.setAudioMuted(true);
+  worker.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  worker.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  worker.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  worker.webContents.session.setPermissionCheckHandler(() => false);
+  worker.on('closed', () => {
+    if (webWorker === worker) webWorker = null;
+  });
+  webWorker = worker;
+  return worker;
+}
+
+function scheduleWebWorkerDispose() {
+  if (webWorkerIdleTimer) clearTimeout(webWorkerIdleTimer);
+  webWorkerIdleTimer = setTimeout(() => {
+    webWorkerIdleTimer = null;
+    if (webWorker && !webWorker.isDestroyed()) webWorker.destroy();
+    webWorker = null;
+  }, 60000);
+  webWorkerIdleTimer.unref?.();
+}
+
+function runWebWorker(url, script, settleMs) {
+  const job = async () => {
+    const worker = ensureWebWorker();
+    if (webWorkerIdleTimer) {
+      clearTimeout(webWorkerIdleTimer);
+      webWorkerIdleTimer = null;
     }
-    const url = await navigateBrowserGuest(guest, raw);
-    return { type: 'text', text: `已打开内置浏览器：${url}` };
-  }
+    let timer = null;
+    try {
+      await Promise.race([
+        worker.loadURL(url),
+        new Promise((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('页面加载超时')), 30000);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (settleMs) await new Promise((resolve) => setTimeout(resolve, settleMs));
+    if (!webWorker || webWorker.isDestroyed()) throw new Error('后台浏览器已关闭');
+    return webWorker.webContents.executeJavaScript(script, true);
+  };
+  const next = webWorkerQueue.then(job, job);
+  webWorkerQueue = next.catch(() => {});
+  return next.finally(() => scheduleWebWorkerDispose());
+}
+
+async function handleBrowserTool(tool, args) {
   if (tool === 'web_search') {
     const query = typeof args?.query === 'string' ? args.query.trim() : '';
     if (!query) throw new Error('缺少搜索关键词');
     const limit = Math.max(1, Math.min(10, Number(args?.count) || 6));
-    await navigateBrowserGuest(
-      guest,
-      `https://cn.bing.com/search?setlang=zh-Hans&q=${encodeURIComponent(query)}`,
-    );
-    const data = await guest.executeJavaScript(
+    const searchUrl = `https://cn.bing.com/search?setlang=zh-Hans&q=${encodeURIComponent(query)}`;
+    const data = await runWebWorker(
+      searchUrl,
       `(() => {
         const limit = ${limit};
         const blocks = [...document.querySelectorAll('li.b_algo, div.result, div.c-container, div.vrwrap')];
@@ -733,7 +791,7 @@ async function handleBrowserTool(tool, args) {
         }
         return { title: document.title, url: location.href, results };
       })()`,
-      true,
+      400,
     );
     if (!data?.results?.length) throw new Error('未找到搜索结果');
     return {
@@ -745,9 +803,9 @@ async function handleBrowserTool(tool, args) {
     const raw = typeof args?.url === 'string' ? args.url.trim() : '';
     if (!raw) throw new Error('缺少目标 URL');
     const maxChars = Math.max(1000, Math.min(30000, Number(args?.maxChars) || 12000));
-    const url = await navigateBrowserGuest(guest, raw);
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const data = await guest.executeJavaScript(
+    const url = parseHttpUrl(raw);
+    const data = await runWebWorker(
+      url,
       `(() => {
         const maxChars = ${maxChars};
         const candidates = [...document.querySelectorAll('article, main, [role="main"]')];
@@ -772,13 +830,28 @@ async function handleBrowserTool(tool, args) {
           content,
         };
       })()`,
-      true,
+      500,
     );
     if (!data?.content) throw new Error('页面没有可读取的正文');
     return {
       type: 'text',
       text: JSON.stringify({ ...data, requestedUrl: url }, null, 2),
     };
+  }
+  const guest = await ensureBrowserGuest();
+  if (tool === 'open_browser') {
+    const raw = typeof args?.url === 'string' ? args.url.trim() : '';
+    if (!raw) {
+      let current = '';
+      try {
+        current = guest.getURL() || '';
+      } catch {
+        /* guest may not have navigated yet */
+      }
+      return { type: 'text', text: `内置浏览器已打开${current ? `：${current}` : ''}` };
+    }
+    const url = await navigateBrowserGuest(guest, raw);
+    return { type: 'text', text: `已打开内置浏览器：${url}` };
   }
   if (tool === 'browser_navigate') {
     const url = await navigateBrowserGuest(guest, args?.url);
@@ -2371,6 +2444,12 @@ if (!app.requestSingleInstanceLock()) {
     tray?.destroy();
     tray = null;
     stopBrowserBridge();
+    if (webWorkerIdleTimer) {
+      clearTimeout(webWorkerIdleTimer);
+      webWorkerIdleTimer = null;
+    }
+    if (webWorker && !webWorker.isDestroyed()) webWorker.destroy();
+    webWorker = null;
     shutdownEngineNow();
     killAllTerminals();
   });

@@ -433,7 +433,7 @@ export function SettingsPanel({
             <div className="setting-row">
               <div className="setting-row-text">
                 <strong>网页搜索与读取</strong>
-                <span>允许 AI 使用必应搜索公开网页，并读取结果页正文</span>
+                <span>允许 AI 在后台使用必应搜索并读取公开网页，不打开 Browser 面板</span>
               </div>
               <button
                 className={`switch ${localTools?.search ? 'on' : ''}`}
@@ -461,7 +461,7 @@ export function SettingsPanel({
               </button>
             </div>
             <div className="setting-note">
-              每次工具调用仍需在对话中确认；新建会话后生效。浏览器控制只作用于内置 Browser 面板；网页搜索与读取会打开 Browser 面板；电脑控制仅在本机、仅在你明确授权的任务中使用。
+              每次工具调用仍需在对话中确认；新建会话后生效。浏览器控制只作用于内置 Browser 面板；网页搜索与读取在后台完成；电脑控制仅在本机、仅在你明确授权的任务中使用。
             </div>
           </div>
           <div className="setting-group">

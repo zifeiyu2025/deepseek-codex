@@ -359,7 +359,7 @@ const searchTools = [
   {
     name: 'web_search',
     description:
-      'Search the public web in the in-app browser with Bing and return result titles, URLs, and snippets. Use web_fetch to read a result.',
+      'Search the public web in the background with Bing and return result titles, URLs, and snippets. Use web_fetch to read a result.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -372,7 +372,7 @@ const searchTools = [
   {
     name: 'web_fetch',
     description:
-      'Open a public web page in the in-app browser and return its title, URL, description, and main text content.',
+      'Fetch a public web page in the background and return its title, URL, description, and main text content.',
     inputSchema: {
       type: 'object',
       properties: {
