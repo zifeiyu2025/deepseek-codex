@@ -1144,6 +1144,7 @@ handleIpc('app:image-data-url', async (_event, filePath) => {
     '.jpeg': 'image/jpeg',
     '.webp': 'image/webp',
     '.gif': 'image/gif',
+    '.svg': 'image/svg+xml',
   }[extension];
   if (!mime) throw new Error('不支持的图片格式');
   const target = await realpathNearest(path.resolve(filePath));
@@ -1636,6 +1637,7 @@ const IMAGE_MIME = {
   '.gif': 'image/gif',
   '.bmp': 'image/bmp',
   '.ico': 'image/x-icon',
+  '.svg': 'image/svg+xml',
 };
 
 handleIpc('app:read-file', async (_event, payload) => {

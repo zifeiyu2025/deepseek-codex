@@ -289,6 +289,7 @@ export function MessageItem({
   onOpenThread,
   onRetry,
   onQuote,
+  onOpenFile,
 }: {
   item: Item;
   busy?: boolean;
@@ -296,6 +297,7 @@ export function MessageItem({
   onOpenThread?: (threadId: string) => void;
   onRetry?: () => void;
   onQuote?: (text: string) => void;
+  onOpenFile?: (path: string) => void;
 }) {
   const [moreOpen, setMoreOpen] = useState(false);
   if (item.type === 'userMessage') {
@@ -426,6 +428,22 @@ export function MessageItem({
               <summary>
                 <span className="kind">{change.kind?.[0]?.toUpperCase() || 'M'}</span>
                 <code>{change.path || change.file || 'unknown'}</code>
+                {onOpenFile && (change.path || change.file) ? (
+                  <button
+                    type="button"
+                    className="change-open"
+                    title="在右侧打开"
+                    aria-label={`在右侧打开 ${change.path || change.file}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onOpenFile(change.path || change.file);
+                    }}
+                    onMouseDown={(event) => event.stopPropagation()}
+                  >
+                    打开
+                  </button>
+                ) : null}
                 <ChevronRight size={12} className="chev" />
               </summary>
               <DiffView diff={change.diff || ''} />
@@ -599,7 +617,15 @@ export function MessageItem({
   );
 }
 
-export function ActivityStep({ item, busy }: { item: Item; busy?: boolean }) {
+export function ActivityStep({
+  item,
+  busy,
+  onOpenFile,
+}: {
+  item: Item;
+  busy?: boolean;
+  onOpenFile?: (path: string) => void;
+}) {
   const label = (() => {
     switch (item.type) {
       case 'commandExecution':
@@ -657,6 +683,22 @@ export function ActivityStep({ item, busy }: { item: Item; busy?: boolean }) {
                   <summary>
                     <span>{change.kind?.[0]?.toUpperCase() || 'M'}</span>
                     <code>{change.path || change.file || 'unknown'}</code>
+                    {onOpenFile && (change.path || change.file) ? (
+                      <button
+                        type="button"
+                        className="change-open"
+                        title="在右侧打开"
+                        aria-label={`在右侧打开 ${change.path || change.file}`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onOpenFile(change.path || change.file);
+                        }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                      >
+                        打开
+                      </button>
+                    ) : null}
                   </summary>
                   <DiffView diff={change.diff || ''} />
                 </details>
@@ -677,7 +719,7 @@ export function ActivityStep({ item, busy }: { item: Item; busy?: boolean }) {
             ) : null}
           </div>
         ) : (
-          <MessageItem item={item} busy={busy} />
+          <MessageItem item={item} busy={busy} onOpenFile={onOpenFile} />
         )}
       </div>
     </details>

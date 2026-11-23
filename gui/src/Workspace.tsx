@@ -108,9 +108,13 @@ function stripAnsi(text: string): string {
 
 export function FilesPanel({
   root,
+  focusFile,
+  artifacts = [],
   onReference,
 }: {
   root: string;
+  focusFile?: { path: string; nonce: number } | null;
+  artifacts?: { path: string; kind?: string }[];
   onReference: (path: string) => void;
 }) {
   const [dirs, setDirs] = useState<Record<string, FileEntry[]>>({});
@@ -238,6 +242,57 @@ export function FilesPanel({
     }
   };
 
+  const isPathInsideRoot = (filePath: string) => {
+    const normalized = filePath.replace(/\\/g, '/');
+    const rootNorm = root.replace(/\\/g, '/').replace(/\/+$/, '');
+    const isAbsolute = /^[a-zA-Z]:\//.test(normalized) || normalized.startsWith('/');
+    if (!isAbsolute) return true;
+    return Boolean(
+      rootNorm &&
+        (normalized.toLowerCase() === rootNorm.toLowerCase() ||
+          normalized.toLowerCase().startsWith(`${rootNorm.toLowerCase()}/`)),
+    );
+  };
+
+  const toRelativePath = (filePath: string) => {
+    const rootNorm = root.replace(/\\/g, '/').replace(/\/+$/, '');
+    let relative = filePath.replace(/\\/g, '/');
+    if (relative.toLowerCase().startsWith(`${rootNorm.toLowerCase()}/`)) {
+      relative = relative.slice(rootNorm.length + 1);
+    }
+    return relative.replace(/^\.?\//, '').replace(/^\/+/, '');
+  };
+
+  useEffect(() => {
+    if (!focusFile?.path || !root) return;
+    let cancelled = false;
+    const relative = toRelativePath(focusFile.path);
+    const parts = relative.split('/').filter(Boolean);
+    if (parts.length === 0) return;
+    const parents = parts.slice(0, -1);
+    (async () => {
+      for (let index = 1; index <= parents.length; index += 1) {
+        await loadDir(parents.slice(0, index).join('/'));
+        if (cancelled) return;
+      }
+      if (cancelled) return;
+      setExpanded((previous) => {
+        const next = new Set(previous);
+        for (let index = 1; index <= parents.length; index += 1) {
+          next.add(parents.slice(0, index).join('/'));
+        }
+        return next;
+      });
+      await openFile(relative);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // focusFile.nonce identifies an explicit open request; the loaders are
+    // intentionally read at effect time to avoid re-running on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusFile?.nonce, root]);
+
   const renderEntries = (relPath: string, depth: number): ReactNode => {
     const entries = dirs[relPath];
     if (!entries) {
@@ -355,6 +410,29 @@ export function FilesPanel({
           <RefreshCw size={13} />
         </button>
       </div>
+      {artifacts.length > 0 ? (
+        <div className="files-artifacts">
+          <div className="files-artifacts-label">产物 · {artifacts.length}</div>
+          {artifacts.map((artifact) => (
+            <button
+              key={artifact.path}
+              className="artifact-row"
+              title={artifact.path}
+              onClick={() => {
+                if (isPathInsideRoot(artifact.path)) {
+                  void openFile(toRelativePath(artifact.path));
+                } else {
+                  void window.codex.showInFolder(artifact.path);
+                }
+              }}
+            >
+              <FileText size={12} />
+              <span className="artifact-name">{baseName(artifact.path)}</span>
+              <span className="artifact-path">{artifact.path}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
       {fileQuery ? (
         <label className="files-search">
           <Search size={12} />

@@ -1456,6 +1456,23 @@ body::before {
   color: var(--faint);
 }
 
+.change-open {
+  flex: none;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.change-open:hover {
+  border-color: var(--line-soft);
+  color: var(--ink);
+}
+
 .change-block[open] summary .chev {
   transform: rotate(90deg);
 }
@@ -3396,6 +3413,69 @@ pre::-webkit-scrollbar-button,
   color: var(--ink-dim);
   font-family: var(--mono);
   font-size: 10.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.files-artifacts {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 190px;
+  padding: 6px 6px 8px;
+  overflow: auto;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.files-artifacts-label {
+  padding: 2px 6px 4px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.artifact-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-dim);
+  font-family: var(--sans);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.artifact-row:hover {
+  background: #1b1b1e;
+  color: var(--ink);
+}
+
+.artifact-row svg {
+  flex: none;
+  color: var(--copper);
+}
+
+.artifact-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.artifact-path {
+  max-width: 45%;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 9.5px;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -7085,6 +7165,13 @@ pre::-webkit-scrollbar-button,
 
 .activity-change summary::-webkit-details-marker {
   display: none;
+}
+
+.activity-change summary code {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .activity-change .diff {

@@ -243,6 +243,7 @@ export default function App() {
     const saved = readStorage('deepseek-codex.rail.tab');
     return saved === 'browser' || saved === 'review' ? saved : 'files';
   });
+  const [fileFocus, setFileFocus] = useState<{ path: string; nonce: number } | null>(null);
   const [reviewCount, setReviewCount] = useState(0);
   const [reviewTick, setReviewTick] = useState(0);
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
@@ -579,6 +580,28 @@ export default function App() {
     if (tab) setRailTab(tab);
     setRailOpen(true);
   }, []);
+
+  const openFileInRail = useCallback(
+    (filePath: string) => {
+      const normalized = filePath.replace(/\\/g, '/');
+      const root = activeCwd.replace(/\\/g, '/').replace(/\/+$/, '');
+      const isAbsolute = /^[a-zA-Z]:\//.test(normalized) || normalized.startsWith('/');
+      const insideRoot =
+        !isAbsolute ||
+        (root &&
+          (normalized.toLowerCase() === root.toLowerCase() ||
+            normalized.toLowerCase().startsWith(`${root.toLowerCase()}/`)));
+      if (!insideRoot) {
+        setNotice('该文件不在当前项目，已在资源管理器中定位');
+        void window.codex.showInFolder(filePath);
+        return;
+      }
+      setRailTab('files');
+      setRailOpen(true);
+      setFileFocus({ path: filePath, nonce: Date.now() });
+    },
+    [activeCwd],
+  );
 
   const referenceFile = useCallback((relPath: string) => {
     setInput((previous) => {
@@ -2687,6 +2710,27 @@ export default function App() {
     return groups;
   }, [visibleItems]);
 
+  const artifacts = useMemo(() => {
+    const seen = new Set<string>();
+    const list: { path: string; kind?: string }[] = [];
+    for (const item of items) {
+      if (item.type === 'fileChange') {
+        for (const change of Array.isArray(item.changes) ? item.changes : []) {
+          const filePath = change?.path || change?.file;
+          if (typeof filePath !== 'string' || !filePath || seen.has(filePath)) continue;
+          seen.add(filePath);
+          list.push({ path: filePath, kind: change?.kind });
+        }
+      } else if (item.type === 'imageGeneration') {
+        const filePath = item.savedPath || item.path;
+        if (typeof filePath !== 'string' || !filePath || seen.has(filePath)) continue;
+        seen.add(filePath);
+        list.push({ path: filePath, kind: 'image' });
+      }
+    }
+    return list.slice(-12);
+  }, [items]);
+
   const railTabs: { id: RailTab; label: string; icon: ReactNode; shortcut?: string }[] = [
     { id: 'files', label: '文件', icon: <FolderOpen size={13} />, shortcut: 'Ctrl+P' },
     { id: 'browser', label: '浏览器', icon: <Globe size={13} />, shortcut: 'Ctrl+T' },
@@ -3009,7 +3053,12 @@ export default function App() {
                       </summary>
                       <div className="activity-body">
                         {entry.items.map((item) => (
-                          <ActivityStep key={item.id} item={item} busy={running} />
+                          <ActivityStep
+                            key={item.id}
+                            item={item}
+                            busy={running}
+                            onOpenFile={openFileInRail}
+                          />
                         ))}
                       </div>
                     </details>
@@ -3026,6 +3075,7 @@ export default function App() {
                         item={entry.item}
                         busy={running}
                         onFixReview={fixReviewComments}
+                        onOpenFile={openFileInRail}
                         onQuote={(text) => setInput(text)}
                         onOpenThread={(subThreadId) =>
                           void resumeThread({ id: subThreadId, preview: '' })
@@ -3155,6 +3205,9 @@ export default function App() {
                 >
                   {tab.icon}
                   <span>{tab.label}</span>
+                  {tab.id === 'files' && artifacts.length > 0 ? (
+                    <span className="rail-badge">{artifacts.length}</span>
+                  ) : null}
                   {tab.id === 'review' && reviewCount > 0 ? (
                     <span className="rail-badge">{reviewCount}</span>
                   ) : null}
@@ -3200,7 +3253,12 @@ export default function App() {
           </div>
           <div className="rail-body">
             <div className={`rail-pane ${railTab === 'files' ? 'active' : ''}`}>
-              <FilesPanel root={activeCwd} onReference={referenceFile} />
+              <FilesPanel
+                root={activeCwd}
+                focusFile={fileFocus}
+                artifacts={artifacts}
+                onReference={referenceFile}
+              />
             </div>
             <div className={`rail-pane ${railTab === 'browser' ? 'active' : ''}`}>
               <BrowserPanel active={railTab === 'browser'} />
