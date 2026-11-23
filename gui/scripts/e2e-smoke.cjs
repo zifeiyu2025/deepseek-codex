@@ -245,6 +245,42 @@ function getJson(url) {
       appPermission.clientBlocked,
     JSON.stringify(appPermission),
   );
+  const computerTools = JSON.parse(
+    await evaluate(`(async()=>{
+      const before=await window.codex.localToolsStatus();
+      try {
+        await window.codex.setLocalTools({...before,computer:true});
+        const config=await window.codex.getConfig();
+        const created=await window.codex.request('thread/start',{
+          cwd:config.defaultCwd,
+          model:config.defaultModel,
+          modelProvider:config.defaultProvider,
+          threadSource:'user',
+          approvalPolicy:'never',
+          sandbox:'danger-full-access',
+          ephemeral:true
+        });
+        const status=await window.codex.request('mcpServerStatus/list',{
+          threadId:created.thread.id,
+          serverName:'shanui_local',
+          detail:'toolsAndAuthOnly'
+        });
+        const server=(status.data||[]).find(entry=>entry.name==='shanui_local');
+        const names=Object.keys(server?.tools||{});
+        return JSON.stringify({
+          listWindows:names.includes('computer_list_windows'),
+          windowState:names.includes('computer_window_state')
+        });
+      } finally {
+        await window.codex.setLocalTools(before);
+      }
+    })()`),
+  );
+  check(
+    '电脑窗口上下文工具',
+    computerTools.listWindows && computerTools.windowState,
+    JSON.stringify(computerTools),
+  );
   await evaluate("document.querySelector('.settings-back')?.click(); true");
   await sleep(500);
 

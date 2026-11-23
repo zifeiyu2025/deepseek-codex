@@ -105,6 +105,8 @@ const COMPUTER_TOOL_NAMES = [
   'computer_monitors',
   'computer_active_window',
   'computer_list_apps',
+  'computer_list_windows',
+  'computer_window_state',
   'computer_focus_app',
   'computer_move',
   'computer_click',
