@@ -113,7 +113,7 @@ export function SettingsPanel({
     try {
       const saved = await window.codex.setLocalTools({ ...localTools, ...patch });
       setLocalTools(saved);
-      setSettingsNotice('本地 AI 工具已更新；引擎已重启，请新建会话后使用。');
+      setSettingsNotice('本地 AI 工具已更新；新建会话后生效。');
     } catch (error: any) {
       setSettingsNotice(friendlyClientError(error));
     } finally {
@@ -440,7 +440,7 @@ export function SettingsPanel({
               </button>
             </div>
             <div className="setting-note">
-              每次工具调用仍需在对话中确认；启用后引擎会重启，新建会话后生效。浏览器控制只作用于内置 Browser 面板；电脑控制仅在本机、仅在你明确授权的任务中使用。
+              每次工具调用仍需在对话中确认；新建会话后生效。浏览器控制只作用于内置 Browser 面板；电脑控制仅在本机、仅在你明确授权的任务中使用。
             </div>
           </div>
           <div className="setting-group">

@@ -89,8 +89,11 @@ const ALLOWED_METHODS = new Set([
   'config/mcpServer/reload',
   'hooks/list',
   'skills/config/write',
+  'config/read',
   'config/batchWrite',
 ]);
+
+const THREAD_CONFIG_METHODS = new Set(['thread/start', 'thread/resume', 'thread/fork']);
 
 let win = null;
 let tray = null;
@@ -205,6 +208,31 @@ function readLocalToolsPrefs() {
   } catch {
     return fallback;
   }
+}
+
+function localMcpServerConfig(prefs) {
+  if (!prefs.browser && !prefs.computer) return null;
+  return {
+    command: process.execPath,
+    args: [localMcpScriptPath()],
+    env: {
+      ELECTRON_RUN_AS_NODE: '1',
+      SHANUI_BRIDGE_FILE: browserBridgeFile(),
+      SHANUI_ENABLE_BROWSER: prefs.browser ? '1' : '0',
+      SHANUI_ENABLE_COMPUTER: prefs.computer ? '1' : '0',
+    },
+    default_tools_approval_mode: 'prompt',
+    tool_timeout_sec: 60,
+  };
+}
+
+function withLocalMcpConfig(method, params) {
+  if (!THREAD_CONFIG_METHODS.has(method)) return params;
+  const server = localMcpServerConfig(readLocalToolsPrefs());
+  if (!server) return params;
+  const config = { ...(params?.config || {}) };
+  config['mcp_servers.shanui_local'] = server;
+  return { ...(params || {}), config };
 }
 
 async function loadApiKey() {
@@ -919,6 +947,25 @@ function startEngine() {
   return promise;
 }
 
+async function purgeLegacyLocalMcpConfig(client) {
+  try {
+    const read = await client.request('config/read', {}, 15000);
+    const servers = read?.config?.mcp_servers;
+    if (!servers || !Object.prototype.hasOwnProperty.call(servers, 'shanui_local')) return;
+    await client.request(
+      'config/batchWrite',
+      {
+        edits: [{ keyPath: 'mcp_servers.shanui_local', value: null, mergeStrategy: 'replace' }],
+        reloadUserConfig: true,
+      },
+      15000,
+    );
+    appendMainLog('removed legacy shanui_local MCP entry from shared user config');
+  } catch (error) {
+    appendMainLog(`legacy local MCP cleanup failed: ${error?.message || error}`);
+  }
+}
+
 async function startEngineInternal() {
   if (child) await stopEngine();
   if (appQuitting) return;
@@ -998,6 +1045,7 @@ async function startEngineInternal() {
       online = true;
       lastError = null;
       broadcastStatus();
+      void purgeLegacyLocalMcpConfig(client);
       if (engineStableTimer) clearTimeout(engineStableTimer);
       engineStableTimer = setTimeout(() => {
         engineStableTimer = null;
@@ -1473,35 +1521,8 @@ handleIpc('app:set-local-tools', async (_event, payload) => {
     browser: Boolean(payload?.browser),
     computer: Boolean(payload?.computer),
   };
-  if (!rpc || !online) throw new Error('引擎未就绪，暂时无法安装本地 AI 工具');
-  const enabled = prefs.browser || prefs.computer;
-  const value = enabled
-    ? {
-        command: process.execPath,
-        args: [localMcpScriptPath()],
-        env: {
-          ELECTRON_RUN_AS_NODE: '1',
-          SHANUI_BRIDGE_FILE: browserBridgeFile(),
-          SHANUI_ENABLE_BROWSER: prefs.browser ? '1' : '0',
-          SHANUI_ENABLE_COMPUTER: prefs.computer ? '1' : '0',
-        },
-        default_tools_approval_mode: 'prompt',
-        tool_timeout_sec: 60,
-      }
-    : null;
-  await rpc.request('config/batchWrite', {
-    edits: [
-      {
-        keyPath: 'mcp_servers.shanui_local',
-        value,
-        mergeStrategy: 'replace',
-      },
-    ],
-    reloadUserConfig: true,
-  });
   fs.mkdirSync(path.dirname(localToolsPrefsFile()), { recursive: true });
   fs.writeFileSync(localToolsPrefsFile(), JSON.stringify(prefs));
-  await restartEngine();
   return prefs;
 });
 
@@ -2099,7 +2120,7 @@ handleIpc('rpc:request', async (_event, method, params) => {
     throw new Error(`不允许的方法：${method}`);
   }
   await initPromise;
-  const result = await rpc.request(method, params);
+  const result = await rpc.request(method, withLocalMcpConfig(method, params));
   collectAllowedRoots(method, result);
   return result;
 });
