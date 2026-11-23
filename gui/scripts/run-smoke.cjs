@@ -26,6 +26,33 @@ if (!fs.existsSync(electron)) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function writeSmokePdf(file) {
+  const pageOne = 'BT /F1 24 Tf 72 720 Td (Smoke PDF Page 1) Tj ET';
+  const pageTwo = 'BT /F1 24 Tf 72 720 Td (Smoke PDF Page 2) Tj ET';
+  const objects = [
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+    '2 0 obj\n<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>\nendobj\n',
+    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R >>\nendobj\n',
+    `4 0 obj\n<< /Length ${Buffer.byteLength(pageOne)} >>\nstream\n${pageOne}\nendstream\nendobj\n`,
+    '5 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>\nendobj\n',
+    `6 0 obj\n<< /Length ${Buffer.byteLength(pageTwo)} >>\nstream\n${pageTwo}\nendstream\nendobj\n`,
+    '7 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+  ];
+  let pdf = '%PDF-1.4\n';
+  const offsets = [];
+  for (const object of objects) {
+    offsets.push(Buffer.byteLength(pdf, 'ascii'));
+    pdf += object;
+  }
+  const xref = Buffer.byteLength(pdf, 'ascii');
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  pdf += offsets
+    .map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`)
+    .join('');
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  fs.writeFileSync(file, Buffer.from(pdf, 'ascii'));
+}
+
 function freePort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -97,6 +124,8 @@ function stopTree(pid) {
 (async () => {
   const port = await freePort();
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'deepseek-codex-smoke-'));
+  const pdfFixture = path.join(profile, 'smoke-preview.pdf');
+  writeSmokePdf(pdfFixture);
   let logs = '';
   const child = spawn(
     electron,
@@ -125,7 +154,11 @@ function stopTree(pid) {
     const result = spawnSync(
       process.execPath,
       [path.join(__dirname, 'e2e-smoke.cjs'), String(port)],
-      { cwd: guiRoot, stdio: 'inherit' },
+      {
+        cwd: guiRoot,
+        stdio: 'inherit',
+        env: { ...process.env, SMOKE_PDF_FIXTURE: pdfFixture },
+      },
     );
     code = result.status ?? 1;
   } catch (error) {

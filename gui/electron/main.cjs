@@ -3084,6 +3084,17 @@ handleIpc('app:read-file', async (_event, payload) => {
   const stat = await fs.promises.stat(target);
   if (!stat.isFile()) throw new Error('不是文件');
   const extension = path.extname(target).toLowerCase();
+  if (extension === '.pdf') {
+    if (stat.size > 30 * 1024 * 1024) throw new Error('PDF 超过 30MB，请在外部阅读器中打开');
+    const data = await fs.promises.readFile(target);
+    return {
+      kind: 'pdf',
+      dataUrl: `data:application/pdf;base64,${data.toString('base64')}`,
+      size: stat.size,
+      path: file,
+      absolutePath: target,
+    };
+  }
   const mime = IMAGE_MIME[extension];
   if (mime) {
     if (stat.size > 12 * 1024 * 1024) throw new Error('图片超过 12MB');

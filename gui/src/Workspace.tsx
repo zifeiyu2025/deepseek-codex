@@ -33,6 +33,51 @@ import { readStorage, writeStorage } from './lib/storage';
 import { Modal } from './components/Modal';
 
 const BROWSER_HISTORY_KEY = 'deepseek-codex.browserHistory';
+const PDF_ANNOTATIONS_KEY = 'deepseek-codex.pdfAnnotations';
+
+type PdfAnnotation = {
+  id: string;
+  page: number;
+  text: string;
+  at: number;
+};
+
+function pdfAnnotationKey(filePath: string) {
+  return filePath.replace(/\\/g, '/').toLowerCase();
+}
+
+function readPdfAnnotations(filePath: string): PdfAnnotation[] {
+  try {
+    const map = JSON.parse(readStorage(PDF_ANNOTATIONS_KEY) || '{}');
+    const list = map?.[pdfAnnotationKey(filePath)];
+    if (!Array.isArray(list)) return [];
+    return list
+      .filter(
+        (entry: any) =>
+          entry &&
+          Number.isInteger(entry.page) &&
+          entry.page > 0 &&
+          typeof entry.text === 'string' &&
+          entry.text.trim(),
+      )
+      .slice(0, 100);
+  } catch {
+    return [];
+  }
+}
+
+function writePdfAnnotations(filePath: string, list: PdfAnnotation[]) {
+  try {
+    const map = JSON.parse(readStorage(PDF_ANNOTATIONS_KEY) || '{}');
+    const next = map && typeof map === 'object' && !Array.isArray(map) ? map : {};
+    const key = pdfAnnotationKey(filePath);
+    if (list.length) next[key] = list.slice(0, 100);
+    else delete next[key];
+    writeStorage(PDF_ANNOTATIONS_KEY, JSON.stringify(next));
+  } catch {
+    /* annotations are best-effort */
+  }
+}
 
 function recordBrowserHistory(url: string, title: string) {
   try {
@@ -145,6 +190,11 @@ export function FilesPanel({
   const [preview, setPreview] = useState<FileContent | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [pdfPage, setPdfPage] = useState(1);
+  const [pdfPageInput, setPdfPageInput] = useState('1');
+  const [pdfAnnotations, setPdfAnnotations] = useState<PdfAnnotation[]>([]);
+  const [pdfAnnotationText, setPdfAnnotationText] = useState('');
+  const [pdfAnnotationsOpen, setPdfAnnotationsOpen] = useState(true);
   const [fileQuery, setFileQuery] = useState('');
   const [fileResults, setFileResults] = useState<
     { path: string; fileName: string; matchType: string }[]
@@ -261,6 +311,46 @@ export function FilesPanel({
     } finally {
       setPreviewLoading(false);
     }
+  };
+
+  useEffect(() => {
+    if (preview?.kind !== 'pdf') return;
+    setPdfPage(1);
+    setPdfPageInput('1');
+    setPdfAnnotations(readPdfAnnotations(preview.absolutePath));
+    setPdfAnnotationText('');
+    setPdfAnnotationsOpen(true);
+  }, [preview?.absolutePath, preview?.kind]);
+
+  const jumpPdfPage = (value: number | string) => {
+    const page = Math.max(1, Math.trunc(Number(value) || 1));
+    setPdfPage(page);
+    setPdfPageInput(String(page));
+  };
+
+  const persistPdfAnnotations = (next: PdfAnnotation[]) => {
+    setPdfAnnotations(next);
+    if (preview?.absolutePath) writePdfAnnotations(preview.absolutePath, next);
+  };
+
+  const addPdfAnnotation = () => {
+    const text = pdfAnnotationText.trim();
+    if (!text) return;
+    const next = [
+      ...pdfAnnotations,
+      {
+        id: `pdf-note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+        page: pdfPage,
+        text: text.slice(0, 2000),
+        at: Date.now(),
+      },
+    ].slice(-100);
+    persistPdfAnnotations(next);
+    setPdfAnnotationText('');
+  };
+
+  const removePdfAnnotation = (id: string) => {
+    persistPdfAnnotations(pdfAnnotations.filter((entry) => entry.id !== id));
   };
 
   const isPathInsideRoot = (filePath: string) => {
@@ -405,6 +495,103 @@ export function FilesPanel({
             <div className="files-error">{previewError}</div>
           ) : preview?.kind === 'image' ? (
             <img className="file-image" src={preview.dataUrl} alt={preview.path} />
+          ) : preview?.kind === 'pdf' ? (
+            <div className="pdf-preview-shell">
+              <div className="pdf-toolbar">
+                <button
+                  className="rail-icon-btn"
+                  onClick={() => jumpPdfPage(pdfPage - 1)}
+                  disabled={pdfPage <= 1}
+                  title="上一页"
+                >
+                  <ArrowLeft size={14} />
+                </button>
+                <input
+                  className="pdf-page-input"
+                  type="number"
+                  min={1}
+                  value={pdfPageInput}
+                  aria-label="PDF 页码"
+                  onChange={(event) => setPdfPageInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') jumpPdfPage(pdfPageInput);
+                  }}
+                />
+                <button className="rail-text-btn" onClick={() => jumpPdfPage(pdfPageInput)}>
+                  跳转
+                </button>
+                <button
+                  className="rail-icon-btn"
+                  onClick={() => jumpPdfPage(pdfPage + 1)}
+                  title="下一页"
+                >
+                  <ArrowRight size={14} />
+                </button>
+                <button
+                  className="rail-text-btn pdf-annotation-toggle"
+                  onClick={() => setPdfAnnotationsOpen((open) => !open)}
+                >
+                  批注 {pdfAnnotations.length}
+                </button>
+              </div>
+              <div className="pdf-stage">
+                <iframe
+                  key={`${preview.absolutePath}-${pdfPage}`}
+                  className="pdf-frame"
+                  title={`PDF ${preview.path} 第 ${pdfPage} 页`}
+                  src={`${preview.dataUrl}#page=${pdfPage}&zoom=page-width`}
+                />
+              </div>
+              {pdfAnnotationsOpen ? (
+                <div className="pdf-annotations">
+                  <div className="pdf-annotation-form">
+                    <span className="pdf-annotation-page">第 {pdfPage} 页</span>
+                    <input
+                      className="setting-input"
+                      value={pdfAnnotationText}
+                      placeholder="添加页级批注"
+                      onChange={(event) => setPdfAnnotationText(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') addPdfAnnotation();
+                      }}
+                    />
+                    <button
+                      className="settings-button"
+                      disabled={!pdfAnnotationText.trim()}
+                      onClick={addPdfAnnotation}
+                    >
+                      <Plus size={13} />
+                      添加
+                    </button>
+                  </div>
+                  {pdfAnnotations.length ? (
+                    <div className="pdf-annotation-list">
+                      {pdfAnnotations.map((annotation) => (
+                        <div className="pdf-annotation-row" key={annotation.id}>
+                          <button
+                            className="pdf-annotation-text"
+                            onClick={() => jumpPdfPage(annotation.page)}
+                            title={`跳到第 ${annotation.page} 页`}
+                          >
+                            <span>第 {annotation.page} 页</span>
+                            <p>{annotation.text}</p>
+                          </button>
+                          <button
+                            className="icon-button"
+                            aria-label="删除批注"
+                            onClick={() => removePdfAnnotation(annotation.id)}
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="files-hint">当前 PDF 还没有批注</div>
+                  )}
+                </div>
+              ) : null}
+            </div>
           ) : preview?.kind === 'binary' ? (
             <div className="files-empty">二进制文件 · {formatBytes(preview.size)}</div>
           ) : (

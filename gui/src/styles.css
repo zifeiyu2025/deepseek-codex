@@ -3585,6 +3585,130 @@ pre::-webkit-scrollbar-button,
   object-fit: contain;
 }
 
+.pdf-preview-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.pdf-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  background: #17171a;
+}
+
+.pdf-page-input {
+  width: 52px;
+  padding: 5px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #111113;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-align: center;
+}
+
+.pdf-annotation-toggle {
+  margin-left: auto;
+}
+
+.pdf-stage {
+  display: flex;
+  flex: 1;
+  min-height: 220px;
+  background: #101012;
+}
+
+.pdf-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #101012;
+}
+
+.pdf-annotations {
+  display: flex;
+  flex: none;
+  max-height: 42%;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line-soft);
+  background: #141416;
+}
+
+.pdf-annotation-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pdf-annotation-form .setting-input {
+  flex: 1;
+  min-width: 80px;
+}
+
+.pdf-annotation-page {
+  flex: none;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 9.5px;
+}
+
+.pdf-annotation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pdf-annotation-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.pdf-annotation-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 7px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--ink-dim);
+  text-align: left;
+}
+
+.pdf-annotation-text span {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.pdf-annotation-text p {
+  margin: 0;
+  overflow: hidden;
+  font-size: 10.5px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+}
+
+.pdf-annotation-row .icon-button {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+}
+
 .terminal-panel {
   display: flex;
   flex: 1;

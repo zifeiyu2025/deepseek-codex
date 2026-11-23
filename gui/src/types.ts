@@ -206,7 +206,7 @@ export type FileEntry = {
 };
 
 export type FileContent = {
-  kind: 'text' | 'image' | 'binary';
+  kind: 'text' | 'image' | 'binary' | 'pdf';
   text?: string;
   dataUrl?: string;
   truncated?: boolean;

@@ -1,6 +1,8 @@
 const http = require('node:http');
+const nodePath = require('node:path');
 
 const port = Number(process.argv[2] || 9333);
+const pdfFixture = process.env.SMOKE_PDF_FIXTURE || '';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function getJson(url) {
@@ -87,6 +89,27 @@ function getJson(url) {
   check('侧栏导航', ['新对话', '插件', '定时任务'].every((item) => boot.nav.some((text) => text.includes(item))), boot.nav.join(' / '));
   check('输入框与模型选择器', boot.composer && boot.model);
   check('主题标记', Boolean(boot.theme), boot.theme);
+
+  if (pdfFixture) {
+    const pdfPreview = JSON.parse(
+      await evaluate(`(async()=>{
+        const result=await window.codex.readFile({
+          root:${JSON.stringify(nodePath.dirname(pdfFixture))},
+          path:${JSON.stringify(nodePath.basename(pdfFixture))}
+        });
+        return JSON.stringify({
+          kind:result.kind,
+          dataUrl:typeof result.dataUrl==='string'&&result.dataUrl.startsWith('data:application/pdf;base64,'),
+          size:result.size
+        });
+      })()`),
+    );
+    check(
+      'PDF 预览数据',
+      pdfPreview.kind === 'pdf' && pdfPreview.dataUrl && pdfPreview.size > 0,
+      JSON.stringify({ kind: pdfPreview.kind, size: pdfPreview.size }),
+    );
+  }
 
   const protocol = JSON.parse(
     await evaluate(`(async () => {
