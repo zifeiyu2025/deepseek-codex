@@ -7700,3 +7700,29 @@ pre::-webkit-scrollbar-button,
   background: #242428;
   color: var(--ink);
 }
+
+.goal-budget {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.goal-budget input {
+  width: 160px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: none;
+  background: #141416;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.goal-budget input:focus {
+  border-color: var(--accent);
+}

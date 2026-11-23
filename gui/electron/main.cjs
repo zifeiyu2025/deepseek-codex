@@ -212,6 +212,7 @@ function readLocalToolsPrefs() {
     computerAllowedApps: [],
     browserOriginPolicy: 'any',
     browserAllowedOrigins: [],
+    browserFullCdp: false,
   };
   try {
     const saved = JSON.parse(fs.readFileSync(localToolsPrefsFile(), 'utf8'));
@@ -233,6 +234,7 @@ function readLocalToolsPrefs() {
       browserAllowedOrigins: Array.isArray(saved?.browserAllowedOrigins)
         ? saved.browserAllowedOrigins.filter((origin) => typeof origin === 'string' && origin.trim())
         : [],
+      browserFullCdp: Boolean(saved?.browserFullCdp),
     };
   } catch {
     return fallback;
@@ -352,6 +354,7 @@ function localMcpServerConfig(prefs) {
       SHANUI_ENABLE_WEB_SEARCH: prefs.search ? '1' : '0',
       SHANUI_ENABLE_OCR: prefs.ocr ? '1' : '0',
       SHANUI_COMPUTER_ALLOWED_APPS: JSON.stringify(prefs.computerAllowedApps || []),
+      SHANUI_BROWSER_FULL_CDP: prefs.browserFullCdp ? '1' : '0',
     },
     default_tools_approval_mode: 'prompt',
     tool_timeout_sec: 120,
@@ -1156,6 +1159,16 @@ async function handleBrowserTool(tool, args) {
   if (tool === 'browser_navigate') {
     const url = await navigateBrowserGuest(guest, args?.url);
     return { type: 'text', text: `已导航到 ${url}` };
+  }
+  if (tool === 'browser_eval') {
+    if (!readLocalToolsPrefs().browserFullCdp) throw new Error('完整 CDP 未启用');
+    const script = typeof args?.script === 'string' ? args.script : '';
+    if (!script.trim()) throw new Error('缺少脚本内容');
+    const value = await guest.executeJavaScript(script, true);
+    return {
+      type: 'text',
+      text: JSON.stringify({ result: value === undefined ? null : value }, null, 2),
+    };
   }
   if (tool === 'browser_snapshot') {
     const data = await guest.executeJavaScript(
@@ -2167,6 +2180,7 @@ handleIpc('app:set-local-tools', async (_event, payload) => {
           .filter((origin) => typeof origin === 'string' && origin.trim())
           .map((origin) => origin.trim())
       : [],
+    browserFullCdp: Boolean(payload?.browserFullCdp),
   };
   fs.mkdirSync(path.dirname(localToolsPrefsFile()), { recursive: true });
   fs.writeFileSync(localToolsPrefsFile(), JSON.stringify(prefs));

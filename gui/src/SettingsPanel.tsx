@@ -68,6 +68,7 @@ export function SettingsPanel({
     computerAllowedApps: string[];
     browserOriginPolicy: 'any' | 'allowlist';
     browserAllowedOrigins: string[];
+    browserFullCdp: boolean;
   } | null>(null);
   const [computerAppsInput, setComputerAppsInput] = useState('');
   const [browserOriginsInput, setBrowserOriginsInput] = useState('');
@@ -138,6 +139,7 @@ export function SettingsPanel({
           computerAllowedApps: [],
           browserOriginPolicy: 'any',
           browserAllowedOrigins: [],
+          browserFullCdp: false,
         }),
       );
   }, [tab]);
@@ -151,6 +153,7 @@ export function SettingsPanel({
     computerAllowedApps: string[];
     browserOriginPolicy: 'any' | 'allowlist';
     browserAllowedOrigins: string[];
+    browserFullCdp: boolean;
   }>) => {
     if (!localTools || localToolsBusy) return;
     setLocalToolsBusy(true);
@@ -607,6 +610,25 @@ export function SettingsPanel({
                     if (event.key === 'Enter') event.currentTarget.blur();
                   }}
                 />
+              </div>
+            ) : null}
+            {localTools?.browser ? (
+              <div className="setting-row">
+                <div className="setting-row-text">
+                  <strong>完整 CDP</strong>
+                  <span>允许 AI 在页面中执行任意脚本，风险较高；新会话生效</span>
+                </div>
+                <button
+                  className={`switch ${localTools.browserFullCdp ? 'on' : ''}`}
+                  role="switch"
+                  aria-checked={localTools.browserFullCdp}
+                  disabled={localToolsBusy}
+                  onClick={() =>
+                    void updateLocalTools({ browserFullCdp: !localTools.browserFullCdp })
+                  }
+                >
+                  <span />
+                </button>
               </div>
             ) : null}
             <div className="setting-row">

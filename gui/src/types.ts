@@ -296,6 +296,7 @@ declare global {
         computerAllowedApps: string[];
         browserOriginPolicy: 'any' | 'allowlist';
         browserAllowedOrigins: string[];
+        browserFullCdp: boolean;
       }>;
       setLocalTools(prefs: {
         browser: boolean;
@@ -306,6 +307,7 @@ declare global {
         computerAllowedApps: string[];
         browserOriginPolicy: 'any' | 'allowlist';
         browserAllowedOrigins: string[];
+        browserFullCdp: boolean;
       }): Promise<{
         browser: boolean;
         computer: boolean;
@@ -315,6 +317,7 @@ declare global {
         computerAllowedApps: string[];
         browserOriginPolicy: 'any' | 'allowlist';
         browserAllowedOrigins: string[];
+        browserFullCdp: boolean;
       }>;
       ocrFile(payload: {
         path: string;

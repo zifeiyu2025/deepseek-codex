@@ -10,6 +10,7 @@ const enableBrowser = process.env.SHANUI_ENABLE_BROWSER === '1';
 const enableComputer = process.env.SHANUI_ENABLE_COMPUTER === '1';
 const enableWebSearch = process.env.SHANUI_ENABLE_WEB_SEARCH === '1';
 const enableOcr = process.env.SHANUI_ENABLE_OCR === '1';
+const enableFullCdp = process.env.SHANUI_BROWSER_FULL_CDP === '1';
 const computerAllowedApps = (() => {
   try {
     const parsed = JSON.parse(process.env.SHANUI_COMPUTER_ALLOWED_APPS || '[]');
@@ -403,8 +404,20 @@ const browserTools = [
   },
 ];
 
-const searchTools = [
-  {
+if (enableFullCdp) {
+  browserTools.push({
+    name: 'browser_eval',
+    description:
+      'Execute JavaScript in the active in-app browser page and return its JSON-serializable result. Only available when full CDP access is enabled.',
+    inputSchema: {
+      type: 'object',
+      properties: { script: { type: 'string', description: 'JavaScript expression or IIFE' } },
+      required: ['script'],
+    },
+  });
+}
+
+const searchTools = [  {
     name: 'web_search',
     description:
       'Search the public web in the background with DeepSeek Search when configured, falling back to Bing. Returns result titles, URLs, and snippets; use web_fetch to read a result.',

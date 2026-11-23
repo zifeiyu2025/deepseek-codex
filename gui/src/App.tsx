@@ -324,6 +324,7 @@ export default function App() {
   const [goal, setGoal] = useState<ThreadGoal | null>(null);
   const [goalDialogOpen, setGoalDialogOpen] = useState(false);
   const [goalObjective, setGoalObjective] = useState('');
+  const [goalBudgetInput, setGoalBudgetInput] = useState('');
   const [goalBusy, setGoalBusy] = useState(false);
   const [usage, setUsage] = useState<{
     total: number;
@@ -1679,6 +1680,7 @@ export default function App() {
   const openGoalDialog = useCallback(
     (objective?: string) => {
       setGoalObjective(objective?.trim() || goal?.objective || '');
+      setGoalBudgetInput(goal?.tokenBudget ? String(goal.tokenBudget) : '');
       setGoalDialogOpen(true);
     },
     [goal],
@@ -1712,6 +1714,11 @@ export default function App() {
         objective,
         status: 'active',
         origin: 'user',
+        ...(Number(goalBudgetInput) > 0
+          ? { tokenBudget: Math.floor(Number(goalBudgetInput)) }
+          : goal
+            ? { tokenBudget: null }
+            : {}),
       });
       goalRequestRef.current += 1;
       setGoal(result?.goal ?? null);
@@ -1722,7 +1729,7 @@ export default function App() {
     } finally {
       setGoalBusy(false);
     }
-  }, [config, goalObjective, refreshThreads]);
+  }, [config, goal, goalBudgetInput, goalObjective, refreshThreads]);
 
   const toggleGoalStatus = useCallback(async () => {
     const id = threadRef.current;
@@ -1783,6 +1790,7 @@ export default function App() {
     setGoal(null);
     setGoalDialogOpen(false);
     setGoalObjective('');
+    setGoalBudgetInput('');
     setUsage({ total: 0, context: null, lastInput: 0, lastOutput: 0, input: 0, cached: 0 });
     setLiveDiff('');
   }, []);
@@ -4579,6 +4587,16 @@ export default function App() {
               placeholder="描述目标与可衡量的完成条件"
               rows={5}
             />
+            <label className="goal-budget">
+              <span>Token 预算（留空表示不限）</span>
+              <input
+                type="number"
+                min={0}
+                value={goalBudgetInput}
+                onChange={(event) => setGoalBudgetInput(event.target.value)}
+                placeholder="例如 200000"
+              />
+            </label>
             {goal ? (
               <div className="goal-meta">
                 <span>{GOAL_STATUS_LABELS[goal.status] || goal.status}</span>
