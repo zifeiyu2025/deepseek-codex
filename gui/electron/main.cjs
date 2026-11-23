@@ -600,6 +600,12 @@ function attachBrowserGuest(contents) {
   contents.once('destroyed', () => {
     if (browserGuest === contents) browserGuest = null;
   });
+  contents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) {
+      contents.loadURL(url).catch(() => {});
+    }
+    return { action: 'deny' };
+  });
   const waiters = browserWaiters;
   browserWaiters = [];
   for (const resolve of waiters) resolve();
@@ -682,18 +688,24 @@ async function handleBrowserTool(tool, args) {
   if (tool === 'browser_snapshot') {
     const data = await guest.executeJavaScript(
       `(() => {
-        document.querySelectorAll('[data-shanui-ref]').forEach((el) => el.removeAttribute('data-shanui-ref'));
         const text = (document.body?.innerText || '').replace(/\\s+/g, ' ').trim();
         const candidates = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"],[role="checkbox"],[role="tab"],[contenteditable="true"]')];
         const elements = [];
+        let seq = window.__shanuiRefSeq || 0;
         for (const el of candidates) {
           if (elements.length >= 120) break;
           const rect = el.getBoundingClientRect();
           const style = getComputedStyle(el);
           if (rect.width <= 0 || rect.height <= 0 || style.visibility === 'hidden' || style.display === 'none') continue;
           if (rect.bottom < 0 || rect.top > innerHeight * 2) continue;
-          const ref = 'e' + (elements.length + 1);
-          el.setAttribute('data-shanui-ref', ref);
+          let ref = el.getAttribute('data-shanui-ref');
+          if (!ref || !/^e\\d+$/.test(ref)) {
+            do {
+              seq += 1;
+              ref = 'e' + seq;
+            } while (document.querySelector('[data-shanui-ref="' + ref + '"]'));
+            el.setAttribute('data-shanui-ref', ref);
+          }
           elements.push({
             ref,
             tag: el.tagName.toLowerCase(),
@@ -703,6 +715,7 @@ async function handleBrowserTool(tool, args) {
             bbox: { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), w: Math.round(rect.width), h: Math.round(rect.height) },
           });
         }
+        window.__shanuiRefSeq = seq;
         return { title: document.title, url: location.href, text: text.slice(0, 12000), elements };
       })()`,
       true,
