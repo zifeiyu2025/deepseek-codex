@@ -641,15 +641,27 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
         });
         const server=(status.data||[]).find(entry=>entry.name==='shanui_local');
         const names=Object.keys(server?.tools||{});
+        const jsResponse=await window.codex.request('mcpServer/tool/call',{
+          threadId:created.thread.id,
+          server:'shanui_local',
+          tool:'js',
+          arguments:{code:'const blocked=(fn)=>{try{fn();return false}catch{return true}};const windows=await sky.list_windows();const installed=await sky.list_installed_apps({limit:1});nodeRepl.write(JSON.stringify({windows:Array.isArray(windows.windows),installed:Array.isArray(installed.apps),requireType:typeof require,processType:typeof process,invokeHidden:typeof __shanuiInvoke,sandboxed:blocked(()=>sky.list_apps.constructor("return process")())&&blocked(()=>globalThis.constructor.constructor("return process")())&&blocked(()=>console.log.constructor("return process")())}));'}
+        });
+        const jsText=(jsResponse.content||[]).find(entry=>entry.type==='text')?.text||'';
+        let jsApi=null;
+        try { jsApi=JSON.parse(jsText); } catch {}
         return JSON.stringify({
           listWindows:names.includes('computer_list_windows'),
+          installedApps:names.includes('computer_list_installed_apps'),
           getWindow:names.includes('computer_get_window'),
           launchApp:names.includes('computer_launch_app'),
           activateWindow:names.includes('computer_activate_window'),
           windowState:names.includes('computer_window_state'),
           drag:names.includes('computer_drag'),
           setValue:names.includes('computer_set_value'),
-          elementAction:names.includes('computer_element_action')
+          elementAction:names.includes('computer_element_action'),
+          js:names.includes('js')&&names.includes('js_reset'),
+          skyApi:jsApi?.windows===true&&jsApi?.installed===true&&jsApi?.requireType==='undefined'&&jsApi?.processType==='undefined'&&jsApi?.invokeHidden==='undefined'&&jsApi?.sandboxed===true
         });
       } finally {
         await window.codex.setLocalTools(before);
@@ -659,13 +671,16 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
   check(
     '电脑窗口上下文工具',
     computerTools.listWindows &&
+      computerTools.installedApps &&
       computerTools.getWindow &&
       computerTools.launchApp &&
       computerTools.activateWindow &&
       computerTools.windowState &&
       computerTools.drag &&
       computerTools.setValue &&
-      computerTools.elementAction,
+      computerTools.elementAction &&
+      computerTools.js &&
+      computerTools.skyApi,
     JSON.stringify(computerTools),
   );
   const keyChord = parseComputerKeyChord('Control_L+Shift_L+period');
@@ -724,6 +739,7 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
           select:names.includes('browser_select'),
           tabs:['browser_tab_list','browser_tab_open','browser_tab_select','browser_tab_close'].every(name=>names.includes(name)),
           inspect:['browser_dialog','browser_network_log','browser_wait_for_response','browser_wait_for_download','browser_element_screenshot','browser_check','browser_press','browser_element','browser_clipboard','browser_download'].every(name=>names.includes(name)),
+          js:names.includes('js')&&names.includes('js_reset'),
           evalTool:names.includes('browser_eval')
         });
       } finally {
@@ -741,6 +757,7 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
       browserTools.select &&
       browserTools.tabs &&
       browserTools.inspect &&
+      browserTools.js &&
       !browserTools.evalTool,
     JSON.stringify(browserTools),
   );
@@ -1040,6 +1057,18 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
           const dialogHandled=dialog
             ? await call('browser_dialog',{action:'accept'})
             : null;
+          await call('browser_navigate',{url:${JSON.stringify(permissionOrigin)}});
+          await call('js',{code:'const smokeJsValue = 11;'});
+          const jsApi=await call('js',{code:'const snapshot=await browser.snapshot();const foundJs=await browser.find({role:"button",name:"Smoke Button"});await browser.fill({selector:"#smoke-input"},"js smoke");const inputValue=await browser.element({selector:"#smoke-input",property:"value"});const defaultApi=await browser.getDefault();nodeRepl.write(JSON.stringify({persisted:smokeJsValue+1,title:snapshot.title,found:foundJs.elements?.some(element=>element.name.includes("Smoke Button")),value:inputValue.value,defaultApi:defaultApi.id,requireType:typeof require,processType:typeof process}));'});
+          const jsImageResponse=await window.codex.request('mcpServer/tool/call',{
+            threadId:created.thread.id,
+            server:'shanui_local',
+            tool:'js',
+            arguments:{code:'const dataUrl=await browser.screenshot();nodeRepl.write("shot="+dataUrl.slice(0,22));'}
+          });
+          const jsImage=(jsImageResponse.content||[]).some(entry=>entry.type==='image'&&entry.data?.length>1000);
+          await call('js_reset',{});
+          const jsReset=await call('js',{code:"nodeRepl.write(JSON.stringify({type:typeof smokeJsValue}))"});
           return JSON.stringify({
             waited:waited?.matched===true,
             found:found?.elements?.some(element=>element.name.includes('Smoke Button')),
@@ -1058,7 +1087,16 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
             tabsAfter:Array.isArray(tabsAfter?.tabs)&&!tabsAfter.tabs.some(tab=>tab.id===opened?.tab?.id),
             networkWait:responseWait?.response?.status===200,
             networkLogged:networkLog?.entries?.some(entry=>entry.url.includes('/network-smoke')),
-            dialog:Boolean(dialog&&dialogHandled?.handled==='accept')
+            dialog:Boolean(dialog&&dialogHandled?.handled==='accept'),
+            jsApi:jsApi?.persisted===12&&
+              jsApi?.title==='permission smoke'&&
+              jsApi?.found===true&&
+              jsApi?.value==='js smoke'&&
+              jsApi?.defaultApi==='shanui-in-app-browser'&&
+              jsApi?.requireType==='undefined'&&
+              jsApi?.processType==='undefined',
+            jsImage,
+            jsReset:jsReset?.type==='undefined'
           });
         } finally {
           await window.codex.setLocalTools(before);
@@ -1084,7 +1122,10 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
         browserApi.tabsAfter &&
         browserApi.networkWait &&
         browserApi.networkLogged &&
-        browserApi.dialog,
+        browserApi.dialog &&
+        browserApi.jsApi &&
+        browserApi.jsImage &&
+        browserApi.jsReset,
       JSON.stringify(browserApi),
     );
   } finally {

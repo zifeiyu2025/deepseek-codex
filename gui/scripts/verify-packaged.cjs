@@ -65,7 +65,7 @@ async function evaluate(page, expression) {
   });
   try {
     const response = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('packaged evaluate timeout')), 30000);
+      const timer = setTimeout(() => reject(new Error('packaged evaluate timeout')), 90000);
       socket.addEventListener('message', (event) => {
         const message = JSON.parse(event.data);
         if (message.id !== 1) return;
@@ -123,17 +123,68 @@ async function evaluate(page, expression) {
             sandbox:'danger-full-access',
             ephemeral:true
           });
+          const before=await window.codex.localToolsStatus();
+          let toolsReady=false;
+          let jsReady=false;
+          let installedReady=false;
+          try {
+            await window.codex.setLocalTools({...before,computer:true});
+            const computerThread=await window.codex.request('thread/start',{
+              cwd:config.defaultCwd,
+              model:config.defaultModel,
+              modelProvider:config.defaultProvider,
+              threadSource:'user',
+              approvalPolicy:'never',
+              sandbox:'danger-full-access',
+              ephemeral:true
+            });
+            const status=await window.codex.request('mcpServerStatus/list',{
+              threadId:computerThread.thread.id,
+              serverName:'shanui_local',
+              detail:'toolsAndAuthOnly'
+            });
+            const server=(status.data||[]).find(entry=>entry.name==='shanui_local');
+            const names=Object.keys(server?.tools||{});
+            toolsReady=names.includes('js')&&names.includes('js_reset')&&names.includes('computer_list_installed_apps');
+            const callJs=async(code)=>{
+              const response=await window.codex.request('mcpServer/tool/call',{
+                threadId:computerThread.thread.id,
+                server:'shanui_local',
+                tool:'js',
+                arguments:{code}
+              });
+              if(response?.isError) throw new Error(response.content?.[0]?.text||'js failed');
+              return (response.content||[]).find(entry=>entry.type==='text')?.text||'';
+            };
+            const text=await callJs('const blocked=(fn)=>{try{fn();return false}catch{return true}};const windows=await sky.list_windows();const installed=await sky.list_installed_apps({limit:1});nodeRepl.write(JSON.stringify({windows:Array.isArray(windows.windows),installed:Array.isArray(installed.apps),invokeHidden:typeof __shanuiInvoke,sandboxed:blocked(()=>sky.list_apps.constructor("return process")())&&blocked(()=>globalThis.constructor.constructor("return process")())}));');
+            const parsed=JSON.parse(text);
+            jsReady=parsed.windows===true&&parsed.installed===true&&parsed.invokeHidden==='undefined'&&parsed.sandboxed===true;
+            installedReady=parsed.installed===true;
+          } finally {
+            await window.codex.setLocalTools(before);
+          }
           return JSON.stringify({
             ready,
             threadId:created?.thread?.id||'',
             model:config.defaultModel,
             provider:config.defaultProvider,
-            title:document.title
+            title:document.title,
+            toolsReady,
+            jsReady,
+            installedReady
           });
         })()`,
       ),
     );
-    if (!result.ready || !result.threadId) throw new Error(JSON.stringify(result));
+    if (
+      !result.ready ||
+      !result.threadId ||
+      !result.toolsReady ||
+      !result.jsReady ||
+      !result.installedReady
+    ) {
+      throw new Error(JSON.stringify(result));
+    }
     console.log(JSON.stringify({ ok: true, executable, ...result }, null, 2));
   } finally {
     try {

@@ -75,6 +75,15 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       capabilities: {},
       clientInfo: { name: 'verify-computer', version: '1' },
     });
+    const installed = parseJson(
+      await tool('computer_list_installed_apps', {
+        name_contains: 'Notepad',
+        limit: 10,
+      }),
+    ).apps;
+    if (!installed.some((app) => /WindowsNotepad/i.test(app.aumid || ''))) {
+      throw new Error('installed Notepad AUMID not found');
+    }
     const windows = parseJson(await tool('computer_list_windows', {})).windows;
     const window = windows.find(
       (entry) =>
@@ -146,6 +155,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
           },
           typed: true,
           screenshotId: screenshot.id,
+          installedAumid: installed.find((app) =>
+            /WindowsNotepad/i.test(app.aumid || ''),
+          ).aumid,
         },
         null,
         2,

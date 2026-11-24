@@ -552,6 +552,9 @@ function localMcpServerConfig(prefs) {
         }
       }
       if (prefs.browser) approvals.browser_upload = { approval_mode: 'approve' };
+      if (prefs.browser || prefs.computer) {
+        approvals.js = { approval_mode: 'approve' };
+      }
       return Object.keys(approvals).length ? { tools: approvals } : {};
     })(),
     default_tools_approval_mode: 'prompt',
