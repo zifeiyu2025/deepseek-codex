@@ -1,6 +1,6 @@
 {
   "name": "deepseek-codex-gui",
-  "version": "0.45.50",
+  "version": "0.45.51",
   "private": true,
   "description": "Independent desktop GUI for the locally built Codex app-server, defaulting to DeepSeek.",
   "author": "local",
@@ -65,7 +65,8 @@
     }
   },
   "dependencies": {
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "pdfjs-dist": "^6.5.438"
   },
   "devDependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",

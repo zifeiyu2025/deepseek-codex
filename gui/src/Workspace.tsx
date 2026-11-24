@@ -31,6 +31,7 @@ import type { FileContent, FileEntry } from './types';
 import { friendlyClientError } from './lib/errors';
 import { readStorage, writeStorage } from './lib/storage';
 import { Modal } from './components/Modal';
+import { PdfPageView, type PdfRect } from './PdfPageView';
 
 const BROWSER_HISTORY_KEY = 'deepseek-codex.browserHistory';
 const PDF_ANNOTATIONS_KEY = 'deepseek-codex.pdfAnnotations';
@@ -40,10 +41,37 @@ type PdfAnnotation = {
   page: number;
   text: string;
   at: number;
+  kind?: 'note' | 'highlight';
+  rect?: PdfRect;
 };
 
 function pdfAnnotationKey(filePath: string) {
   return filePath.replace(/\\/g, '/').toLowerCase();
+}
+
+function validPdfRect(value: any): PdfRect | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const rect = {
+    x: Number(value.x),
+    y: Number(value.y),
+    width: Number(value.width),
+    height: Number(value.height),
+  };
+  if (
+    !Number.isFinite(rect.x) ||
+    !Number.isFinite(rect.y) ||
+    !Number.isFinite(rect.width) ||
+    !Number.isFinite(rect.height) ||
+    rect.x < 0 ||
+    rect.y < 0 ||
+    rect.width <= 0 ||
+    rect.height <= 0 ||
+    rect.x + rect.width > 1.001 ||
+    rect.y + rect.height > 1.001
+  ) {
+    return undefined;
+  }
+  return rect;
 }
 
 function readPdfAnnotations(filePath: string): PdfAnnotation[] {
@@ -60,7 +88,21 @@ function readPdfAnnotations(filePath: string): PdfAnnotation[] {
           typeof entry.text === 'string' &&
           entry.text.trim(),
       )
-      .slice(0, 100);
+      .slice(0, 100)
+      .map((entry: any, index: number) => {
+        const rect = validPdfRect(entry.rect);
+        return {
+          id:
+            typeof entry.id === 'string' && entry.id
+              ? entry.id
+              : `pdf-note-restored-${index}`,
+          page: entry.page,
+          text: entry.text.slice(0, 2000),
+          at: Number(entry.at) || Date.now(),
+          kind: rect ? 'highlight' : 'note',
+          ...(rect ? { rect } : {}),
+        };
+      });
   } catch {
     return [];
   }
@@ -192,6 +234,11 @@ export function FilesPanel({
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [pdfPage, setPdfPage] = useState(1);
   const [pdfPageInput, setPdfPageInput] = useState('1');
+  const [pdfTotalPages, setPdfTotalPages] = useState(1);
+  const [pdfZoom, setPdfZoom] = useState(1);
+  const [pdfRotation, setPdfRotation] = useState(0);
+  const [pdfSelectMode, setPdfSelectMode] = useState(false);
+  const [pdfPendingRect, setPdfPendingRect] = useState<PdfRect | null>(null);
   const [pdfAnnotations, setPdfAnnotations] = useState<PdfAnnotation[]>([]);
   const [pdfAnnotationText, setPdfAnnotationText] = useState('');
   const [pdfAnnotationsOpen, setPdfAnnotationsOpen] = useState(true);
@@ -317,15 +364,28 @@ export function FilesPanel({
     if (preview?.kind !== 'pdf') return;
     setPdfPage(1);
     setPdfPageInput('1');
+    setPdfTotalPages(1);
+    setPdfZoom(1);
+    setPdfRotation(0);
+    setPdfSelectMode(false);
+    setPdfPendingRect(null);
     setPdfAnnotations(readPdfAnnotations(preview.absolutePath));
     setPdfAnnotationText('');
     setPdfAnnotationsOpen(true);
   }, [preview?.absolutePath, preview?.kind]);
 
+  const handlePdfPageCount = useCallback((count: number) => {
+    setPdfTotalPages(Math.max(1, Math.trunc(count) || 1));
+  }, []);
+
   const jumpPdfPage = (value: number | string) => {
-    const page = Math.max(1, Math.trunc(Number(value) || 1));
+    const page = Math.min(
+      pdfTotalPages,
+      Math.max(1, Math.trunc(Number(value) || 1)),
+    );
     setPdfPage(page);
     setPdfPageInput(String(page));
+    setPdfPendingRect(null);
   };
 
   const persistPdfAnnotations = (next: PdfAnnotation[]) => {
@@ -336,6 +396,7 @@ export function FilesPanel({
   const addPdfAnnotation = () => {
     const text = pdfAnnotationText.trim();
     if (!text) return;
+    const rect = pdfPendingRect;
     const next = [
       ...pdfAnnotations,
       {
@@ -343,10 +404,19 @@ export function FilesPanel({
         page: pdfPage,
         text: text.slice(0, 2000),
         at: Date.now(),
-      },
+        kind: rect ? 'highlight' : 'note',
+        ...(rect ? { rect } : {}),
+      } as PdfAnnotation,
     ].slice(-100);
     persistPdfAnnotations(next);
     setPdfAnnotationText('');
+    setPdfPendingRect(null);
+    setPdfSelectMode(false);
+  };
+
+  const selectPdfRect = (rect: PdfRect) => {
+    setPdfPendingRect(rect);
+    setPdfAnnotationsOpen(true);
   };
 
   const removePdfAnnotation = (id: string) => {
@@ -510,6 +580,7 @@ export function FilesPanel({
                   className="pdf-page-input"
                   type="number"
                   min={1}
+                  max={pdfTotalPages}
                   value={pdfPageInput}
                   aria-label="PDF 页码"
                   onChange={(event) => setPdfPageInput(event.target.value)}
@@ -517,15 +588,53 @@ export function FilesPanel({
                     if (event.key === 'Enter') jumpPdfPage(pdfPageInput);
                   }}
                 />
+                <span className="pdf-annotation-page">/ {pdfTotalPages}</span>
                 <button className="rail-text-btn" onClick={() => jumpPdfPage(pdfPageInput)}>
                   跳转
                 </button>
                 <button
                   className="rail-icon-btn"
                   onClick={() => jumpPdfPage(pdfPage + 1)}
+                  disabled={pdfPage >= pdfTotalPages}
                   title="下一页"
                 >
                   <ArrowRight size={14} />
+                </button>
+                <button
+                  className="rail-text-btn"
+                  onClick={() => setPdfZoom((value) => Math.max(0.5, value - 0.15))}
+                  title="缩小"
+                >
+                  −
+                </button>
+                <span className="pdf-zoom-label">{Math.round(pdfZoom * 100)}%</span>
+                <button
+                  className="rail-text-btn"
+                  onClick={() => setPdfZoom((value) => Math.min(3, value + 0.15))}
+                  title="放大"
+                >
+                  +
+                </button>
+                <button className="rail-text-btn" onClick={() => setPdfZoom(1)}>
+                  适宽
+                </button>
+                <button
+                  className="rail-icon-btn"
+                  onClick={() => setPdfRotation((value) => (value + 90) % 360)}
+                  title="旋转 90°"
+                >
+                  <RotateCw size={14} />
+                </button>
+                <button
+                  className={`rail-text-btn pdf-select-toggle ${pdfSelectMode ? 'on' : ''}`}
+                  aria-pressed={pdfSelectMode}
+                  onClick={() => {
+                    setPdfSelectMode((value) => !value);
+                    setPdfPendingRect(null);
+                  }}
+                  title="在页面上拖拽框选区域"
+                >
+                  框选
                 </button>
                 <button
                   className="rail-text-btn pdf-annotation-toggle"
@@ -535,21 +644,40 @@ export function FilesPanel({
                 </button>
               </div>
               <div className="pdf-stage">
-                <iframe
-                  key={`${preview.absolutePath}-${pdfPage}`}
-                  className="pdf-frame"
-                  title={`PDF ${preview.path} 第 ${pdfPage} 页`}
-                  src={`${preview.dataUrl}#page=${pdfPage}&zoom=page-width`}
+                <PdfPageView
+                  dataUrl={preview.dataUrl || ''}
+                  page={pdfPage}
+                  zoom={pdfZoom}
+                  rotation={pdfRotation}
+                  selecting={pdfSelectMode}
+                  annotations={pdfAnnotations.filter(
+                    (annotation) => annotation.page === pdfPage,
+                  )}
+                  onPageCount={handlePdfPageCount}
+                  onRectSelected={selectPdfRect}
                 />
               </div>
               {pdfAnnotationsOpen ? (
                 <div className="pdf-annotations">
                   <div className="pdf-annotation-form">
                     <span className="pdf-annotation-page">第 {pdfPage} 页</span>
+                    {pdfPendingRect ? (
+                      <span className="pdf-pending-rect">
+                        区域
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-label="取消区域选择"
+                          onClick={() => setPdfPendingRect(null)}
+                        >
+                          <X size={10} />
+                        </button>
+                      </span>
+                    ) : null}
                     <input
                       className="setting-input"
                       value={pdfAnnotationText}
-                      placeholder="添加页级批注"
+                      placeholder={pdfPendingRect ? '为框选区域添加批注' : '添加页级批注'}
                       onChange={(event) => setPdfAnnotationText(event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') addPdfAnnotation();
@@ -573,7 +701,10 @@ export function FilesPanel({
                             onClick={() => jumpPdfPage(annotation.page)}
                             title={`跳到第 ${annotation.page} 页`}
                           >
-                            <span>第 {annotation.page} 页</span>
+                            <span>
+                              第 {annotation.page} 页
+                              {annotation.rect ? ' · 区域' : ''}
+                            </span>
                             <p>{annotation.text}</p>
                           </button>
                           <button

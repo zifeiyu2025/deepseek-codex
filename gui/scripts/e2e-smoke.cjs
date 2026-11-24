@@ -1,4 +1,5 @@
 const http = require('node:http');
+const fs = require('node:fs');
 const nodePath = require('node:path');
 const {
   parseComputerKeyChord,
@@ -113,6 +114,112 @@ function getJson(url) {
       pdfPreview.kind === 'pdf' && pdfPreview.dataUrl && pdfPreview.size > 0,
       JSON.stringify({ kind: pdfPreview.kind, size: pdfPreview.size }),
     );
+
+    const defaultCwd = await evaluate(
+      "(async()=>{const config=await window.codex.getConfig();return config.defaultCwd||'';})()",
+    );
+    let uiPdf = '';
+    try {
+      if (defaultCwd) {
+        const fileName = `shanui-pdf-smoke-${process.pid}.pdf`;
+        uiPdf = nodePath.join(defaultCwd, fileName);
+        fs.copyFileSync(pdfFixture, uiPdf);
+        await evaluate(
+          `window.dispatchEvent(new CustomEvent('deepseek-codex:file-search',{detail:{query:${JSON.stringify(fileName)}}})); true`,
+        );
+        let clicked = false;
+        for (let attempt = 0; attempt < 30 && !clicked; attempt += 1) {
+          await sleep(150);
+          clicked = await evaluate(`(()=>{
+            const row=[...document.querySelectorAll('.file-results .file-row.file')]
+              .find(entry=>entry.textContent.includes(${JSON.stringify(fileName)}));
+            if(!row) return false;
+            row.click();
+            return true;
+          })()`);
+        }
+        let viewer = null;
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          await sleep(150);
+          viewer = JSON.parse(
+            await evaluate(`JSON.stringify({
+              canvas:!!document.querySelector('.pdf-page-canvas'),
+              width:document.querySelector('.pdf-page-canvas')?.width||0,
+              pages:document.querySelector('.pdf-annotation-page')?.textContent||'',
+              pageValue:document.querySelector('.pdf-page-input')?.value||''
+            })`),
+          );
+          if (viewer.canvas && viewer.width > 0 && viewer.pages.includes('2')) break;
+        }
+        check(
+          'PDF.js 查看器渲染',
+          clicked && viewer?.canvas && viewer.width > 0 && viewer.pages.includes('2'),
+          JSON.stringify({ clicked, viewer }),
+        );
+        await evaluate(
+          "document.querySelector('button[title=\"下一页\"]')?.click(); true",
+        );
+        await sleep(500);
+        const pageTwo = await evaluate(
+          "document.querySelector('.pdf-page-input')?.value||''",
+        );
+        await evaluate("document.querySelector('button[title=\"放大\"]')?.click(); true");
+        await sleep(300);
+        const zoom = await evaluate(
+          "document.querySelector('.pdf-zoom-label')?.textContent||''",
+        );
+        await evaluate("document.querySelector('.pdf-select-toggle')?.click(); true");
+        await sleep(150);
+        await evaluate(`(()=>{
+          const surface=document.querySelector('.pdf-select-surface.active');
+          if(!surface) return false;
+          const rect=surface.getBoundingClientRect();
+          const points=[
+            ['pointerdown',0.18,0.22],
+            ['pointermove',0.55,0.46],
+            ['pointerup',0.55,0.46]
+          ];
+          for(const [type,x,y] of points){
+            surface.dispatchEvent(new PointerEvent(type,{
+              bubbles:true,
+              pointerId:1,
+              isPrimary:true,
+              clientX:rect.left+rect.width*x,
+              clientY:rect.top+rect.height*y
+            }));
+          }
+          return true;
+        })()`);
+        await sleep(200);
+        const pending = await evaluate("!!document.querySelector('.pdf-pending-rect')");
+        await evaluate(`(()=>{
+          const input=document.querySelector('.pdf-annotation-form input.setting-input');
+          if(!input) return false;
+          const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+          setter.call(input,'smoke highlight');
+          input.dispatchEvent(new Event('input',{bubbles:true}));
+          return true;
+        })()`);
+        await sleep(150);
+        await evaluate(
+          "document.querySelector('.pdf-annotation-form .settings-button')?.click(); true",
+        );
+        await sleep(350);
+        const highlight = JSON.parse(
+          await evaluate(`JSON.stringify({
+            boxes:document.querySelectorAll('.pdf-highlight-box:not(.draft)').length,
+            stored:(localStorage.getItem('deepseek-codex.pdfAnnotations')||'').includes('smoke highlight')
+          })`),
+        );
+        check(
+          'PDF 图形批注',
+          pageTwo === '2' && zoom && zoom !== '100%' && pending && highlight.boxes > 0 && highlight.stored,
+          JSON.stringify({ pageTwo, zoom, pending, highlight }),
+        );
+      }
+    } finally {
+      if (uiPdf) fs.rmSync(uiPdf, { force: true });
+    }
   }
 
   const protocol = JSON.parse(
