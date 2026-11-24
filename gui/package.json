@@ -1,6 +1,6 @@
 {
   "name": "deepseek-codex-gui",
-  "version": "0.45.63",
+  "version": "0.45.64",
   "private": true,
   "description": "Independent desktop GUI for the locally built Codex app-server, defaulting to DeepSeek.",
   "author": "local",
@@ -18,7 +18,7 @@
     "test:packaged": "node scripts/verify-packaged.cjs",
     "native:wgc": "node scripts/prepare-native.cjs",
     "clean:release": "node scripts/clean-release.cjs",
-    "dist:win": "npm run build && node scripts/prepare-native.cjs && node scripts/prepare-engine.cjs && electron-builder --win portable"
+    "dist:win": "npm run build && node scripts/prepare-native.cjs && node scripts/prepare-engine.cjs && electron-builder --win nsis portable"
   },
   "build": {
     "appId": "local.deepseek.codex",
@@ -60,6 +60,12 @@
       "icon": "build/icon.png",
       "target": [
         {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
           "target": "portable",
           "arch": [
             "x64"
@@ -67,8 +73,19 @@
         }
       ]
     },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "DeepSeek Codex",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "DeepSeek-Codex-Setup-${version}.${ext}"
+    },
     "portable": {
-      "artifactName": "DeepSeek-Codex-${version}.exe"
+      "artifactName": "DeepSeek-Codex-Portable-${version}.${ext}"
     }
   },
   "dependencies": {
