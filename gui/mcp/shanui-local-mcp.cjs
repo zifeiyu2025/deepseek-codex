@@ -1625,6 +1625,105 @@ const browserTools = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'browser_find',
+    description:
+      'Find visible page elements by role, accessible name, text, label, placeholder, test id, or CSS selector. Returns refs usable by click/type/select/hover.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        selector: { type: 'string', description: 'CSS selector' },
+        role: {
+          type: 'string',
+          description: 'ARIA/implicit role such as button, link, textbox, checkbox, tab, combobox',
+        },
+        name: { type: 'string', description: 'Accessible name substring' },
+        text: { type: 'string', description: 'Visible text substring' },
+        label: { type: 'string', description: 'Associated label text' },
+        placeholder: { type: 'string' },
+        testId: { type: 'string', description: 'data-testid value' },
+        limit: { type: 'number', description: 'Maximum matches, defaults to 20' },
+      },
+    },
+  },
+  {
+    name: 'browser_wait_for',
+    description:
+      'Wait until a selector, text, URL substring, or element ref becomes visible. Returns the final page URL/title.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        selector: { type: 'string' },
+        text: { type: 'string' },
+        urlContains: { type: 'string' },
+        ref: { type: 'string', description: 'Element ref from browser_snapshot or browser_find' },
+        timeout_ms: { type: 'number', description: 'Timeout in milliseconds, defaults to 5000' },
+      },
+    },
+  },
+  {
+    name: 'browser_hover',
+    description: 'Hover a page element by snapshot/find ref or CSS selector.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        selector: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'browser_select',
+    description:
+      'Choose an option in a page select element by value, visible label, or zero-based index.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        selector: { type: 'string' },
+        value: { type: 'string' },
+        label: { type: 'string' },
+        index: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: 'browser_tab_list',
+    description: 'List open in-app browser tabs with id, title, URL, active/loading state, and errors.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'browser_tab_open',
+    description: 'Open a new in-app browser tab, optionally at an http/https URL.',
+    inputSchema: {
+      type: 'object',
+      properties: { url: { type: 'string', description: 'Optional absolute http(s) URL' } },
+    },
+  },
+  {
+    name: 'browser_tab_select',
+    description: 'Activate a browser tab by tab_id, title substring, or zero-based index.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tab_id: { type: 'string' },
+        title: { type: 'string' },
+        index: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: 'browser_tab_close',
+    description: 'Close a browser tab by tab_id, title substring, or zero-based index.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tab_id: { type: 'string' },
+        title: { type: 'string' },
+        index: { type: 'number' },
+      },
+    },
+  },
+  {
     name: 'browser_click',
     description:
       'Click an element in the in-app browser by snapshot ref, CSS selector, exact visible text, or viewport coordinates.',

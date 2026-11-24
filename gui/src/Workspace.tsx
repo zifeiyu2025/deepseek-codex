@@ -27,7 +27,7 @@ import {
   X,
 } from 'lucide-react';
 import { Highlight, Prism, themes } from 'prism-react-renderer';
-import type { FileContent, FileEntry } from './types';
+import type { BrowserTabsRequest, FileContent, FileEntry } from './types';
 import { friendlyClientError } from './lib/errors';
 import { readStorage, writeStorage } from './lib/storage';
 import { Modal } from './components/Modal';
@@ -1211,6 +1211,62 @@ export function BrowserPanel({ active }: { active: boolean }) {
       }
     }
   };
+
+  useEffect(() => {
+    const tabSummary = (tab: BrowserTab, isActive = tab.id === activeId) => ({
+      id: tab.id,
+      title: tab.title || tab.url,
+      url: tab.url,
+      active: isActive,
+      loading: tab.loading,
+      error: tab.error,
+    });
+    const findTab = (request: BrowserTabsRequest) => {
+      if (request.tabId) {
+        return tabs.find((tab) => tab.id === request.tabId) || null;
+      }
+      if (request.index !== null && request.index !== undefined) {
+        return tabs[Number(request.index)] || null;
+      }
+      if (request.title) {
+        const wanted = request.title.toLowerCase();
+        return tabs.find((tab) => `${tab.title} ${tab.url}`.toLowerCase().includes(wanted)) || null;
+      }
+      return null;
+    };
+    return window.codex.onBrowserTabsRequest((request) => {
+      const respond = (result: unknown, error?: string) =>
+        void window.codex.respondBrowserTabs({ requestId: request.requestId, result, error });
+      try {
+        if (request.action === 'list') {
+          respond({ tabs: tabs.map((tab) => tabSummary(tab)), activeId });
+          return;
+        }
+        if (request.action === 'open') {
+          const url = normalizeUrl(request.url || '') || initialUrl;
+          const id = createTab(url);
+          respond({ tab: { id, title: url, url, active: true, loading: true, error: null } });
+          return;
+        }
+        const tab = findTab(request);
+        if (!tab) throw new Error('未找到标签页');
+        if (request.action === 'select') {
+          setVisited(true);
+          setActiveId(tab.id);
+          respond({ tab: tabSummary(tab, true) });
+          return;
+        }
+        if (request.action === 'close') {
+          closeTab(tab.id);
+          respond({ closed: tabSummary(tab) });
+          return;
+        }
+        throw new Error('未知标签页操作');
+      } catch (error: any) {
+        respond(null, error?.message || String(error));
+      }
+    });
+  }, [tabs, activeId, initialUrl]);
 
   const capturePage = async () => {
     const view = getActiveView();

@@ -310,6 +310,15 @@ export type BrowserPermissionRequest = {
   requestedUrl: string;
 };
 
+export type BrowserTabsRequest = {
+  requestId: string;
+  action: 'list' | 'open' | 'select' | 'close';
+  url?: string;
+  tabId?: string;
+  title?: string;
+  index?: number | null;
+};
+
 export type ComputerApp = {
   appId: string;
   displayName: string;
@@ -384,6 +393,14 @@ declare global {
       }): Promise<boolean>;
       onBrowserPermissionRequest(
         callback: (request: BrowserPermissionRequest) => void,
+      ): () => void;
+      respondBrowserTabs(payload: {
+        requestId: string;
+        result: unknown;
+        error?: string;
+      }): Promise<boolean>;
+      onBrowserTabsRequest(
+        callback: (request: BrowserTabsRequest) => void,
       ): () => void;
       browserActivate(webContentsId: number): Promise<boolean>;
       captureScreen(): Promise<string>;

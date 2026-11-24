@@ -563,6 +563,11 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
         return JSON.stringify({
           snapshot:names.includes('browser_snapshot'),
           upload:names.includes('browser_upload'),
+          find:names.includes('browser_find'),
+          wait:names.includes('browser_wait_for'),
+          hover:names.includes('browser_hover'),
+          select:names.includes('browser_select'),
+          tabs:['browser_tab_list','browser_tab_open','browser_tab_select','browser_tab_close'].every(name=>names.includes(name)),
           evalTool:names.includes('browser_eval')
         });
       } finally {
@@ -572,7 +577,14 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
   );
   check(
     '浏览器工具集',
-    browserTools.snapshot && browserTools.upload && !browserTools.evalTool,
+    browserTools.snapshot &&
+      browserTools.upload &&
+      browserTools.find &&
+      browserTools.wait &&
+      browserTools.hover &&
+      browserTools.select &&
+      browserTools.tabs &&
+      !browserTools.evalTool,
     JSON.stringify(browserTools),
   );
   const browserPrivacy = JSON.parse(
@@ -692,7 +704,12 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
   check('内置浏览器挂载', await evaluate("!!document.querySelector('.browser-frame')"));
   const permissionServer = http.createServer((_request, response) => {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end('<!doctype html><title>permission smoke</title><p>permission smoke</p>');
+    response.end(
+      '<!doctype html><title>permission smoke</title><p>permission smoke</p>' +
+        '<button aria-label="Smoke Button">Smoke Button</button>' +
+        '<label>Smoke Input <input id="smoke-input" placeholder="smoke placeholder"></label>' +
+        '<select aria-label="Smoke Select"><option value="a">Alpha</option><option value="b">Beta</option></select>',
+    );
   });
   await new Promise((resolve) => permissionServer.listen(0, resolve));
   const permissionPort = permissionServer.address().port;
@@ -788,6 +805,77 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
         promptResult,
         promptEvents: JSON.parse(promptEvents || '[]').length,
       }),
+    );
+
+    const browserApi = JSON.parse(
+      await evaluate(`(async()=>{
+        const before=await window.codex.localToolsStatus();
+        try {
+          await window.codex.setLocalTools({...before,browser:true});
+          const config=await window.codex.getConfig();
+          const created=await window.codex.request('thread/start',{
+            cwd:config.defaultCwd,
+            model:config.defaultModel,
+            modelProvider:config.defaultProvider,
+            threadSource:'user',
+            approvalPolicy:'never',
+            sandbox:'danger-full-access',
+            ephemeral:true
+          });
+          const call=async(tool,args)=>{
+            const response=await window.codex.request('mcpServer/tool/call',{
+              threadId:created.thread.id,
+              server:'shanui_local',
+              tool,
+              arguments:args
+            });
+            if(response?.isError) throw new Error(response.content?.[0]?.text||tool+' failed');
+            const text=(response.content||[]).find(entry=>entry.type==='text')?.text||'';
+            if(!text) return null;
+            try { return JSON.parse(text); } catch { return text; }
+          };
+          await call('browser_navigate',{url:${JSON.stringify(permissionOrigin)}});
+          const waited=await call('browser_wait_for',{text:'permission smoke',timeout_ms:5000});
+          const found=await call('browser_find',{role:'button',name:'Smoke Button'});
+          const ref=found?.elements?.[0]?.ref||'';
+          const hovered=await call('browser_hover',{ref});
+          const selected=await call('browser_select',{selector:'select',label:'Beta'});
+          const tabsBefore=await call('browser_tab_list',{});
+          const opened=await call('browser_tab_open',{url:${JSON.stringify(permissionOrigin)}+'?tab=2'});
+          const tabsOpened=await call('browser_tab_list',{});
+          const tabSelected=await call('browser_tab_select',{tab_id:opened?.tab?.id});
+          const tabClosed=await call('browser_tab_close',{tab_id:opened?.tab?.id});
+          const tabsAfter=await call('browser_tab_list',{});
+          return JSON.stringify({
+            waited:waited?.matched===true,
+            found:found?.elements?.some(element=>element.name.includes('Smoke Button')),
+            ref:Boolean(ref),
+            hovered:String(hovered||'').includes('已悬停'),
+            selected:selected?.value==='b'&&selected?.label==='Beta',
+            tabsBefore:Array.isArray(tabsBefore?.tabs)&&tabsBefore.tabs.length>=1,
+            tabOpened:tabsOpened?.tabs?.some(tab=>tab.id===opened?.tab?.id),
+            tabSelected:tabSelected?.tab?.id===opened?.tab?.id,
+            tabClosed:tabClosed?.closed?.id===opened?.tab?.id,
+            tabsAfter:Array.isArray(tabsAfter?.tabs)&&!tabsAfter.tabs.some(tab=>tab.id===opened?.tab?.id)
+          });
+        } finally {
+          await window.codex.setLocalTools(before);
+        }
+      })()`),
+    );
+    check(
+      '浏览器常用工具调用',
+      browserApi.waited &&
+        browserApi.found &&
+        browserApi.ref &&
+        browserApi.hovered &&
+        browserApi.selected &&
+        browserApi.tabsBefore &&
+        browserApi.tabOpened &&
+        browserApi.tabSelected &&
+        browserApi.tabClosed &&
+        browserApi.tabsAfter,
+      JSON.stringify(browserApi),
     );
   } finally {
     await evaluate(`window.codex.browserSetSitePermissions({

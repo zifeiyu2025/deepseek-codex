@@ -149,6 +149,8 @@ let nextBrowserPermissionPromptId = 1;
 let activeBrowserPermissionPromptId = null;
 const pendingBrowserPermissionPrompts = new Map();
 const browserPermissionPromptQueue = [];
+let nextBrowserTabsRequestId = 1;
+const pendingBrowserTabsRequests = new Map();
 
 const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 
@@ -1051,6 +1053,23 @@ function requestBrowserPermission(permission, origin, requestedUrl) {
   });
 }
 
+function requestBrowserTabs(action, payload = {}) {
+  return new Promise((resolve, reject) => {
+    const requestId = `browser-tabs-${nextBrowserTabsRequestId++}`;
+    const timer = setTimeout(() => {
+      pendingBrowserTabsRequests.delete(requestId);
+      reject(new Error('浏览器标签页操作超时'));
+    }, 10000);
+    pendingBrowserTabsRequests.set(requestId, { resolve, reject, timer });
+    const message = { requestId, action, ...payload };
+    if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.send('browser:tabs-request', message);
+    } else {
+      sendToRenderer('browser:tabs-request', message);
+    }
+  });
+}
+
 function browserDownloadAllowed(rawUrl, prefs = readLocalToolsPrefs()) {
   const origin = normalizeBrowserOrigin(rawUrl);
   const sitePolicy = origin ? prefs.browserSiteDownloadPolicies?.[origin] : null;
@@ -1427,6 +1446,173 @@ async function ocrFile(filePath, purpose) {
   };
 }
 
+function browserFindScript(spec, limit = 20) {
+  return `(() => {
+    const spec = ${JSON.stringify(spec)};
+    const limit = ${Math.max(1, Math.min(100, Number(limit) || 20))};
+    const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+    const roleOf = (el) => {
+      const explicit = clean(el.getAttribute('role')).toLowerCase().split(' ')[0];
+      if (explicit) return explicit;
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'a' && el.hasAttribute('href')) return 'link';
+      if (tag === 'button') return 'button';
+      if (tag === 'textarea') return 'textbox';
+      if (tag === 'select') return el.multiple ? 'listbox' : 'combobox';
+      if (tag === 'summary') return 'button';
+      if (el.isContentEditable) return 'textbox';
+      if (/^h[1-6]$/.test(tag)) return 'heading';
+      if (tag === 'input') {
+        const type = String(el.type || 'text').toLowerCase();
+        if (['button', 'submit', 'reset', 'file'].includes(type)) return 'button';
+        if (type === 'checkbox') return 'checkbox';
+        if (type === 'radio') return 'radio';
+        if (type === 'range') return 'slider';
+        if (type === 'number') return 'spinbutton';
+        if (type === 'search') return 'searchbox';
+        if (type === 'hidden') return 'hidden';
+        return 'textbox';
+      }
+      return '';
+    };
+    const labelOf = (el) => {
+      const values = [];
+      if (el.labels) values.push(...[...el.labels].map((label) => label.innerText));
+      const labelledBy = el.getAttribute('aria-labelledby');
+      if (labelledBy) {
+        for (const id of labelledBy.split(/\\s+/)) {
+          const node = document.getElementById(id);
+          if (node) values.push(node.innerText);
+        }
+      }
+      return clean(values.join(' '));
+    };
+    const nameOf = (el) => clean([
+      el.getAttribute('aria-label'),
+      labelOf(el),
+      el.getAttribute('placeholder'),
+      el.getAttribute('title'),
+      el.getAttribute('alt'),
+      el.innerText,
+      el.value,
+    ].filter(Boolean).join(' '));
+    const visible = (el) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const style = getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width > 1 && rect.height > 1;
+    };
+    const interactiveSelector = '[role],a[href],button,input,textarea,select,summary,[contenteditable="true"],[tabindex]';
+    const candidates = spec.selector
+      ? [...document.querySelectorAll(spec.selector)]
+      : spec.role
+        ? [...document.querySelectorAll(interactiveSelector)]
+        : [...document.querySelectorAll('body *')];
+    const matches = [];
+    let seq = window.__shanuiRefSeq || 0;
+    for (const el of candidates) {
+      if (matches.length >= limit) break;
+      if (!visible(el)) continue;
+      const role = roleOf(el);
+      const name = nameOf(el);
+      const text = clean(el.innerText || el.value || '');
+      const label = labelOf(el);
+      const placeholder = clean(el.getAttribute('placeholder'));
+      const testId = clean(el.getAttribute('data-testid') || el.getAttribute('data-test-id'));
+      if (spec.role && role !== String(spec.role).toLowerCase()) continue;
+      if (spec.name && !name.toLowerCase().includes(String(spec.name).toLowerCase())) continue;
+      if (spec.text && !text.toLowerCase().includes(String(spec.text).toLowerCase())) continue;
+      if (spec.label && !label.toLowerCase().includes(String(spec.label).toLowerCase())) continue;
+      if (spec.placeholder && !placeholder.toLowerCase().includes(String(spec.placeholder).toLowerCase())) continue;
+      if (spec.testId && testId !== String(spec.testId)) continue;
+      let ref = el.getAttribute('data-shanui-ref');
+      if (!ref || !/^e\\d+$/.test(ref)) {
+        do {
+          seq += 1;
+          ref = 'e' + seq;
+        } while (document.querySelector('[data-shanui-ref="' + ref + '"]'));
+        el.setAttribute('data-shanui-ref', ref);
+      }
+      const rect = el.getBoundingClientRect();
+      matches.push({
+        ref,
+        tag: el.tagName.toLowerCase(),
+        role,
+        name: name.slice(0, 160),
+        text: text.slice(0, 200),
+        label: label.slice(0, 160),
+        placeholder: placeholder.slice(0, 160),
+        testId,
+        value: el.value === undefined ? null : String(el.value).slice(0, 200),
+        checked: typeof el.checked === 'boolean' ? el.checked : null,
+        disabled: Boolean(el.disabled),
+        bbox: {
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+          w: Math.round(rect.width),
+          h: Math.round(rect.height),
+        },
+      });
+    }
+    window.__shanuiRefSeq = seq;
+    return { url: location.href, title: document.title, elements: matches };
+  })()`;
+}
+
+function browserTargetScript(spec) {
+  return `(() => {
+    const spec = ${JSON.stringify(spec)};
+    let el = null;
+    if (spec.ref) el = document.querySelector('[data-shanui-ref="' + CSS.escape(spec.ref) + '"]');
+    if (!el && spec.selector) el = document.querySelector(spec.selector);
+    if (!el) throw new Error('未找到目标元素');
+    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') {
+      throw new Error('目标元素不可见');
+    }
+    return {
+      x: Math.round(rect.left + rect.width / 2),
+      y: Math.round(rect.top + rect.height / 2),
+      tag: el.tagName.toLowerCase(),
+      text: ((el.innerText || el.value || el.getAttribute('aria-label') || '') + '').replace(/\\s+/g, ' ').trim().slice(0, 120),
+    };
+  })()`;
+}
+
+async function handleBrowserTabTool(tool, args) {
+  if (tool === 'browser_tab_list') {
+    const result = await requestBrowserTabs('list');
+    return { type: 'text', text: JSON.stringify(result, null, 2) };
+  }
+  if (tool === 'browser_tab_open') {
+    const raw = typeof args?.url === 'string' ? args.url.trim() : '';
+    const url = raw ? parseHttpUrl(raw) : '';
+    if (url) assertBrowserOrigin(url);
+    const result = await requestBrowserTabs('open', url ? { url } : {});
+    return { type: 'text', text: JSON.stringify(result, null, 2) };
+  }
+  if (tool === 'browser_tab_select') {
+    const result = await requestBrowserTabs('select', {
+      tabId: typeof args?.tab_id === 'string' ? args.tab_id : '',
+      title: typeof args?.title === 'string' ? args.title : '',
+      index: Number.isInteger(Number(args?.index)) ? Number(args.index) : null,
+    });
+    return { type: 'text', text: JSON.stringify(result, null, 2) };
+  }
+  if (tool === 'browser_tab_close') {
+    const result = await requestBrowserTabs('close', {
+      tabId: typeof args?.tab_id === 'string' ? args.tab_id : '',
+      title: typeof args?.title === 'string' ? args.title : '',
+      index: Number.isInteger(Number(args?.index)) ? Number(args.index) : null,
+    });
+    return { type: 'text', text: JSON.stringify(result, null, 2) };
+  }
+  throw new Error(`未知浏览器标签页工具：${tool}`);
+}
+
 async function handleBrowserTool(tool, args) {
   if (tool === 'web_search') {
     const query = typeof args?.query === 'string' ? args.query.trim() : '';
@@ -1512,6 +1698,10 @@ async function handleBrowserTool(tool, args) {
     const result = await ocrFile(filePath, args?.purpose);
     return { type: 'text', text: JSON.stringify(result, null, 2) };
   }
+  if (tool.startsWith('browser_tab_')) {
+    await ensureBrowserGuest();
+    return handleBrowserTabTool(tool, args);
+  }
   const guest = await ensureBrowserGuest();
   if (tool !== 'open_browser' && tool !== 'browser_navigate') {
     assertCurrentBrowserOrigin(guest);
@@ -1580,6 +1770,129 @@ async function handleBrowserTool(tool, args) {
       true,
     );
     return { type: 'text', text: JSON.stringify(data, null, 2) };
+  }
+  if (tool === 'browser_find') {
+    const data = await guest.executeJavaScript(
+      browserFindScript({
+        selector: typeof args?.selector === 'string' ? args.selector : '',
+        role: typeof args?.role === 'string' ? args.role : '',
+        name: typeof args?.name === 'string' ? args.name : '',
+        text: typeof args?.text === 'string' ? args.text : '',
+        label: typeof args?.label === 'string' ? args.label : '',
+        placeholder: typeof args?.placeholder === 'string' ? args.placeholder : '',
+        testId: typeof args?.testId === 'string' ? args.testId : '',
+      }, args?.limit),
+      true,
+    );
+    return { type: 'text', text: JSON.stringify(data, null, 2) };
+  }
+  if (tool === 'browser_wait_for') {
+    const timeoutMs = Math.max(200, Math.min(30000, Number(args?.timeout_ms) || 5000));
+    const selector = typeof args?.selector === 'string' ? args.selector : '';
+    const text = typeof args?.text === 'string' ? args.text : '';
+    const urlContains = typeof args?.urlContains === 'string' ? args.urlContains : '';
+    const ref = typeof args?.ref === 'string' ? args.ref : '';
+    if (!selector && !text && !urlContains && !ref) {
+      throw new Error('缺少等待条件');
+    }
+    const deadline = Date.now() + timeoutMs;
+    let last = null;
+    while (Date.now() < deadline) {
+      const snapshot = await guest.executeJavaScript(
+        `(() => {
+          const visible = (el) => {
+            if (!(el instanceof HTMLElement)) return false;
+            const style = getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            return rect.width > 1 && rect.height > 1 && style.display !== 'none' && style.visibility !== 'hidden';
+          };
+          const selector = ${JSON.stringify(selector)};
+          const ref = ${JSON.stringify(ref)};
+          const element = ref
+            ? document.querySelector('[data-shanui-ref="' + CSS.escape(ref) + '"]')
+            : selector
+              ? document.querySelector(selector)
+              : null;
+          return {
+            url: location.href,
+            title: document.title,
+            elementVisible: element ? visible(element) : false,
+            hasSelector: selector ? Boolean(document.querySelector(selector)) : false,
+            hasText: ${JSON.stringify(text)} ? document.body.innerText.includes(${JSON.stringify(text)}) : false,
+          };
+        })()`,
+        true,
+      );
+      last = snapshot;
+      const selectorOk = !selector || snapshot.hasSelector;
+      const refOk = !ref || snapshot.elementVisible;
+      const textOk = !text || snapshot.hasText;
+      const urlOk = !urlContains || snapshot.url.includes(urlContains);
+      if (selectorOk && refOk && textOk && urlOk) {
+        return {
+          type: 'text',
+          text: JSON.stringify({ matched: true, ...snapshot }, null, 2),
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    throw new Error(
+      `等待超时（${timeoutMs}ms）：${JSON.stringify({ selector, text, urlContains, ref, last })}`,
+    );
+  }
+  if (tool === 'browser_hover') {
+    const target = await guest.executeJavaScript(
+      browserTargetScript({
+        ref: typeof args?.ref === 'string' ? args.ref : '',
+        selector: typeof args?.selector === 'string' ? args.selector : '',
+      }),
+      true,
+    );
+    await prepareGuestInput(guest);
+    await guestInput(guest, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: target.x,
+      y: target.y,
+    });
+    return {
+      type: 'text',
+      text: `已悬停 ${JSON.stringify({ text: target.text, x: target.x, y: target.y })}`,
+    };
+  }
+  if (tool === 'browser_select') {
+    const spec = {
+      ref: typeof args?.ref === 'string' ? args.ref : '',
+      selector: typeof args?.selector === 'string' ? args.selector : '',
+      value: typeof args?.value === 'string' ? args.value : null,
+      label: typeof args?.label === 'string' ? args.label : null,
+      index: Number.isInteger(Number(args?.index)) ? Number(args.index) : null,
+    };
+    if (!spec.ref && !spec.selector) throw new Error('缺少 ref 或 selector');
+    if (spec.value === null && spec.label === null && spec.index === null) {
+      throw new Error('缺少 value、label 或 index');
+    }
+    const result = await guest.executeJavaScript(
+      `(() => {
+        const spec = ${JSON.stringify(spec)};
+        let el = null;
+        if (spec.ref) el = document.querySelector('[data-shanui-ref="' + CSS.escape(spec.ref) + '"]');
+        if (!el && spec.selector) el = document.querySelector(spec.selector);
+        if (!(el instanceof HTMLSelectElement)) throw new Error('目标元素不是 select');
+        el.scrollIntoView({ block: 'center', behavior: 'instant' });
+        let option = null;
+        if (spec.value !== null) option = [...el.options].find((item) => item.value === spec.value) || null;
+        else if (spec.label !== null) option = [...el.options].find((item) => item.text.trim() === spec.label.trim()) || null;
+        else if (spec.index !== null) option = el.options[spec.index] || null;
+        if (!option) throw new Error('未找到指定选项');
+        option.selected = true;
+        el.value = option.value;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return { value: el.value, label: option.text.trim(), index: el.selectedIndex };
+      })()`,
+      true,
+    );
+    return { type: 'text', text: JSON.stringify(result, null, 2) };
   }
   if (tool === 'browser_click') {
     const spec = JSON.stringify({
@@ -2829,6 +3142,16 @@ handleIpc('browser:respond-permission', (_event, payload) => {
   if (!settleBrowserPermissionPrompt(String(payload.id), decision)) {
     throw new Error('站点权限请求已失效');
   }
+  return true;
+});
+
+handleIpc('browser:tabs-result', (_event, payload) => {
+  const pending = pendingBrowserTabsRequests.get(String(payload?.requestId || ''));
+  if (!pending) throw new Error('浏览器标签页请求已失效');
+  pendingBrowserTabsRequests.delete(String(payload.requestId));
+  clearTimeout(pending.timer);
+  if (payload?.error) pending.reject(new Error(String(payload.error)));
+  else pending.resolve(payload?.result ?? null);
   return true;
 });
 
