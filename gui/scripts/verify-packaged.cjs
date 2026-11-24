@@ -163,12 +163,16 @@ async function evaluate(page, expression) {
           } finally {
             await window.codex.setLocalTools(before);
           }
+          const modelsReady=Array.isArray(config.models)&&
+            config.models.some(model=>model.slug==='deepseek-flash')&&
+            config.models.some(model=>model.slug==='deepseek-v4-pro');
           return JSON.stringify({
             ready,
             threadId:created?.thread?.id||'',
             model:config.defaultModel,
             provider:config.defaultProvider,
             title:document.title,
+            modelsReady,
             toolsReady,
             jsReady,
             installedReady
@@ -179,6 +183,8 @@ async function evaluate(page, expression) {
     if (
       !result.ready ||
       !result.threadId ||
+      !result.modelsReady ||
+      result.provider !== 'deepseek' ||
       !result.toolsReady ||
       !result.jsReady ||
       !result.installedReady

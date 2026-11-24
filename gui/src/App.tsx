@@ -259,6 +259,8 @@ function saveAutomations(list: Automation[]) {
   writeJsonStorage('deepseek-codex.automations', list);
 }
 
+const LOCAL_MODEL_PROVIDER = 'deepseek';
+
 export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -839,7 +841,15 @@ export default function App() {
           archived: showArchived || undefined,
         })
         .then((response) => {
-          if (seq === searchSeqRef.current) setSearchResults(response?.data || []);
+          if (seq === searchSeqRef.current) {
+            setSearchResults(
+              (response?.data || []).filter(
+                (result: ThreadSearchResult) =>
+                  !result.thread.modelProvider ||
+                  result.thread.modelProvider === LOCAL_MODEL_PROVIDER,
+              ),
+            );
+          }
         })
         .catch(() => {
           if (seq === searchSeqRef.current) setSearchResults([]);
@@ -1044,6 +1054,7 @@ export default function App() {
         limit: 50,
         sortKey: 'updated_at',
         sortDirection: 'desc',
+        modelProviders: [LOCAL_MODEL_PROVIDER],
       };
       if (projectIdRef.current) params.projectId = projectIdRef.current;
       if (archivedRef.current) params.archived = true;
@@ -1066,6 +1077,7 @@ export default function App() {
         cursor,
         sortKey: 'updated_at',
         sortDirection: 'desc',
+        modelProviders: [LOCAL_MODEL_PROVIDER],
       };
       if (projectIdRef.current) params.projectId = projectIdRef.current;
       if (archivedRef.current) params.archived = true;
@@ -3272,6 +3284,7 @@ export default function App() {
           sortKey: 'updated_at',
           sortDirection: 'desc',
           useStateDbOnly: true,
+          modelProviders: [LOCAL_MODEL_PROVIDER],
         });
         if (cancelled) return;
         const next: Record<string, ThreadSummary> = {};

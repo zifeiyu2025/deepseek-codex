@@ -222,6 +222,33 @@ process.on('unhandledRejection', (reason) => {
   appendMainLog(`unhandledRejection: ${reason instanceof Error ? reason.stack : String(reason)}`);
 });
 
+const DEEPSEEK_PROVIDER_ID = 'deepseek';
+const DEEPSEEK_DEFAULT_MODEL = 'deepseek-flash';
+const DEEPSEEK_MODELS_SOURCE = path.join(__dirname, 'deepseek-models.json');
+let deepseekModelCatalog = null;
+
+function deepseekModelCatalogPath() {
+  const target = path.join(app.getPath('userData'), 'deepseek-models.json');
+  try {
+    if (!deepseekModelCatalog) {
+      deepseekModelCatalog = fs.readFileSync(DEEPSEEK_MODELS_SOURCE);
+    }
+    let current = null;
+    try {
+      current = fs.readFileSync(target);
+    } catch {
+      /* first run */
+    }
+    if (!current || !current.equals(deepseekModelCatalog)) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, deepseekModelCatalog);
+    }
+  } catch (error) {
+    appendMainLog(`deepseek model catalog unavailable: ${error?.message || error}`);
+  }
+  return target;
+}
+
 function apiKeyFile() {
   return path.join(app.getPath('userData'), 'deepseek.key');
 }
@@ -431,21 +458,11 @@ function deepseekApiKey() {
 }
 
 function deepseekBaseUrl() {
-  if (process.env.DEEPSEEK_BASE_URL) return process.env.DEEPSEEK_BASE_URL.replace(/\/+$/, '');
-  try {
-    const raw = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
-    const providerMatch = /^\s*model_provider\s*=\s*"([^"]+)"/m.exec(raw);
-    const provider = providerMatch?.[1] || 'deepseek';
-    const section = new RegExp(
-      `\\[model_providers\\.${provider.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]([\\s\\S]*?)(?=^\\s*\\[|$)`,
-      'm',
-    ).exec(raw);
-    const base = section && /^\s*base_url\s*=\s*"([^"]+)"/m.exec(section[1]);
-    if (base) return base[1].replace(/\/+$/, '');
-  } catch {
-    /* fall through */
-  }
-  return 'https://api.deepseek.com';
+  return (
+    String(process.env.DEEPSEEK_BASE_URL || '')
+      .trim()
+      .replace(/\/+$/, '') || 'https://api.deepseek.com'
+  );
 }
 
 async function deepseekApi(pathname, options = {}) {
@@ -562,22 +579,23 @@ function localMcpServerConfig(prefs) {
   };
 }
 
-function withLocalMcpConfig(method, params) {
+function withLocalThreadConfig(method, params) {
   if (!THREAD_CONFIG_METHODS.has(method)) return params;
   const prefs = readLocalToolsPrefs();
   const server = localMcpServerConfig(prefs);
+  const searchEnabled = prefs.search && hasApiKey();
   const config = { ...(params?.config || {}) };
-  let changed = false;
-  if (server) {
-    config['mcp_servers.shanui_local'] = server;
-    changed = true;
-  }
-  if (prefs.search && hasApiKey()) {
-    config['features.standalone_web_search'] = true;
-    config['model_providers.deepseek.supports_standalone_web_search'] = true;
-    changed = true;
-  }
-  if (!changed) return params;
+  config['model_providers.deepseek'] = {
+    name: DEEPSEEK_PROVIDER_ID,
+    base_url: `${deepseekBaseUrl()}/`,
+    wire_api: 'responses',
+    env_key: 'DEEPSEEK_API_KEY',
+    ...(searchEnabled ? { supports_standalone_web_search: true } : {}),
+  };
+  config['model_catalog_json'] = deepseekModelCatalogPath();
+  config.model_provider = DEEPSEEK_PROVIDER_ID;
+  if (server) config['mcp_servers.shanui_local'] = server;
+  if (searchEnabled) config['features.standalone_web_search'] = true;
   return { ...(params || {}), config };
 }
 
@@ -636,7 +654,7 @@ function resolveCodexBin() {
 
 function loadModels() {
   try {
-    const data = JSON.parse(fs.readFileSync(path.join(codexHome, 'models.json'), 'utf8'));
+    const data = JSON.parse(fs.readFileSync(deepseekModelCatalogPath(), 'utf8'));
     return (data.models || [])
       .filter((model) => !model.visibility || model.visibility === 'list')
       .map((model) => ({
@@ -653,18 +671,10 @@ function loadModels() {
 }
 
 function loadConfigDefaults() {
-  let model = 'deepseek-flash';
-  let provider = 'deepseek';
-  try {
-    const raw = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
-    const modelMatch = raw.match(/^\s*model\s*=\s*"([^"]+)"/m);
-    const providerMatch = raw.match(/^\s*model_provider\s*=\s*"([^"]+)"/m);
-    if (modelMatch) model = modelMatch[1];
-    if (providerMatch) provider = providerMatch[1];
-  } catch {
-    /* defaults */
-  }
-  return { model, provider };
+  return {
+    model: DEEPSEEK_DEFAULT_MODEL,
+    provider: DEEPSEEK_PROVIDER_ID,
+  };
 }
 
 function defaultWorkspace() {
@@ -4487,7 +4497,7 @@ handleIpc('rpc:request', async (_event, method, params) => {
     throw new Error(`不允许的方法：${method}`);
   }
   await initPromise;
-  const result = await rpc.request(method, withLocalMcpConfig(method, params));
+  const result = await rpc.request(method, withLocalThreadConfig(method, params));
   collectAllowedRoots(method, result);
   return result;
 });
