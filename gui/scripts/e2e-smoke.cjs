@@ -317,6 +317,15 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
               clientX:surface.getBoundingClientRect().left+surface.getBoundingClientRect().width*x,
               clientY:surface.getBoundingClientRect().top+surface.getBoundingClientRect().height*y
             }));
+            const colorInput=document.querySelector('.pdf-draw-color');
+            const colorSetter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+            colorSetter.call(colorInput,'#00ff00');
+            colorInput.dispatchEvent(new Event('input',{bubbles:true}));
+            colorInput.dispatchEvent(new Event('change',{bubbles:true}));
+            const widthSelect=document.querySelector('.pdf-draw-width');
+            const widthSetter=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set;
+            widthSetter.call(widthSelect,'5');
+            widthSelect.dispatchEvent(new Event('change',{bubbles:true}));
             setTool('rect');
             await delay(120);
             let surface=document.querySelector('.pdf-draw-surface.active');
@@ -336,8 +345,9 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
             dispatch(surface,'pointerup',0.42,0.60);
             await delay(220);
             let list=Object.values(JSON.parse(localStorage.getItem('deepseek-codex.pdfAnnotations')||'{}'))[0]||[];
-            const shape=list.some(annotation=>annotation.kind==='shape'&&annotation.shape==='rect');
+            const shape=list.find(annotation=>annotation.kind==='shape'&&annotation.shape==='rect');
             const ink=list.some(annotation=>annotation.kind==='ink'&&annotation.points?.length>2);
+            const shapeStyle=shape?.color==='#00ff00'&&shape?.width===5;
             const shapeNodes=document.querySelectorAll('.pdf-shape-layer rect').length;
             const inkNodes=document.querySelectorAll('.pdf-shape-layer polyline').length;
             setTool('erase');
@@ -351,13 +361,14 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
             list=Object.values(JSON.parse(localStorage.getItem('deepseek-codex.pdfAnnotations')||'{}'))[0]||[];
             const erased=!list.some(annotation=>annotation.kind==='shape');
             setTool('none');
-            return JSON.stringify({ok:true,shape,ink,shapeNodes,inkNodes,erased});
+            return JSON.stringify({ok:true,shape:Boolean(shape),shapeStyle,ink,shapeNodes,inkNodes,erased});
           })()`),
         );
         check(
           'PDF 图形与墨迹批注',
           graphicalPdf.ok &&
             graphicalPdf.shape &&
+            graphicalPdf.shapeStyle &&
             graphicalPdf.ink &&
             graphicalPdf.shapeNodes > 0 &&
             graphicalPdf.inkNodes > 0 &&
@@ -669,7 +680,7 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
           hover:names.includes('browser_hover'),
           select:names.includes('browser_select'),
           tabs:['browser_tab_list','browser_tab_open','browser_tab_select','browser_tab_close'].every(name=>names.includes(name)),
-          inspect:['browser_dialog','browser_network_log','browser_wait_for_response','browser_wait_for_download'].every(name=>names.includes(name)),
+          inspect:['browser_dialog','browser_network_log','browser_wait_for_response','browser_wait_for_download','browser_element_screenshot'].every(name=>names.includes(name)),
           evalTool:names.includes('browser_eval')
         });
       } finally {
@@ -943,6 +954,13 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
           const found=await call('browser_find',{role:'button',name:'Smoke Button'});
           const ref=found?.elements?.[0]?.ref||'';
           const hovered=await call('browser_hover',{ref});
+          const elementShotResponse=await window.codex.request('mcpServer/tool/call',{
+            threadId:created.thread.id,
+            server:'shanui_local',
+            tool:'browser_element_screenshot',
+            arguments:{ref}
+          });
+          const elementShot=(elementShotResponse.content||[]).some(entry=>entry.type==='image'&&entry.data?.length>1000);
           const selected=await call('browser_select',{selector:'select',label:'Beta'});
           const tabsBefore=await call('browser_tab_list',{});
           const opened=await call('browser_tab_open',{url:${JSON.stringify(permissionOrigin)}+'?tab=2'});
@@ -977,6 +995,7 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
             found:found?.elements?.some(element=>element.name.includes('Smoke Button')),
             ref:Boolean(ref),
             hovered:String(hovered||'').includes('已悬停'),
+            elementShot,
             selected:selected?.value==='b'&&selected?.label==='Beta',
             tabsBefore:Array.isArray(tabsBefore?.tabs)&&tabsBefore.tabs.length>=1,
             tabOpened:tabsOpened?.tabs?.some(tab=>tab.id===opened?.tab?.id),
@@ -998,6 +1017,7 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
         browserApi.found &&
         browserApi.ref &&
         browserApi.hovered &&
+        browserApi.elementShot &&
         browserApi.selected &&
         browserApi.tabsBefore &&
         browserApi.tabOpened &&

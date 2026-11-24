@@ -3791,13 +3791,23 @@ pre::-webkit-scrollbar-button,
   color: var(--ink);
 }
 
-.pdf-draw-tool {
+.pdf-draw-tool,
+.pdf-draw-width {
   padding: 4px 6px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #111113;
   color: var(--ink-dim);
   font-size: 10px;
+}
+
+.pdf-draw-color {
+  width: 28px;
+  height: 24px;
+  padding: 1px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #111113;
 }
 
 .pdf-pending-rect {

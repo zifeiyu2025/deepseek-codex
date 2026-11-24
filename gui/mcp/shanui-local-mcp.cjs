@@ -1934,6 +1934,18 @@ const browserTools = [
     description: 'Capture a PNG screenshot of the in-app browser.',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'browser_element_screenshot',
+    description:
+      'Capture a PNG screenshot of one visible page element by snapshot/find ref or CSS selector.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        selector: { type: 'string' },
+      },
+    },
+  },
 ];
 
 if (enableFullCdp) {

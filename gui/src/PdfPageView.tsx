@@ -29,6 +29,7 @@ type PdfPageAction = {
   from?: PdfPoint;
   to?: PdfPoint;
   color?: string;
+  width?: number;
 };
 
 function dataUrlToBytes(dataUrl: string) {
@@ -59,6 +60,8 @@ export function PdfPageView({
   onRectSelected,
   onTextSelected,
   drawTool,
+  drawColor,
+  drawWidth,
   onDrawShape,
   onDrawInk,
   onErase,
@@ -73,6 +76,8 @@ export function PdfPageView({
   onRectSelected: (rect: PdfRect) => void;
   onTextSelected: (selection: { text: string; rects: PdfRect[] }) => void;
   drawTool: PdfDrawTool;
+  drawColor: string;
+  drawWidth: number;
   onDrawShape: (shape: 'rect' | 'arrow', from: PdfPoint, to: PdfPoint) => void;
   onDrawInk: (points: PdfPoint[]) => void;
   onErase: (id: string) => void;
@@ -261,6 +266,24 @@ export function PdfPageView({
     selection.removeAllRanges();
   };
 
+  const arrowHeadPoints = (from: PdfPoint, to: PdfPoint) => {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = Math.hypot(dx, dy);
+    if (length < 0.001) return '';
+    const ux = dx / length;
+    const uy = dy / length;
+    const size = 0.022;
+    const half = 0.011;
+    const baseX = to.x - ux * size;
+    const baseY = to.y - uy * size;
+    return [
+      `${to.x},${to.y}`,
+      `${baseX - uy * half},${baseY + ux * half}`,
+      `${baseX + uy * half},${baseY - ux * half}`,
+    ].join(' ');
+  };
+
   const graphicalBounds = (annotation: PdfPageAction): PdfRect | null => {
     if (annotation.points?.length) {
       const xs = annotation.points.map((point) => point.x);
@@ -378,19 +401,6 @@ export function PdfPageView({
           preserveAspectRatio="none"
           aria-hidden="true"
         >
-          <defs>
-            <marker
-              id="pdf-arrow-head"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff7a59" />
-            </marker>
-          </defs>
           {annotations.map((annotation) => {
             if (annotation.points?.length) {
               return (
@@ -401,7 +411,7 @@ export function PdfPageView({
                     .join(' ')}
                   fill="none"
                   stroke={annotation.color || '#5ea7ff'}
-                  strokeWidth="2.5"
+                  strokeWidth={annotation.width || 2.5}
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   vectorEffect="non-scaling-stroke"
@@ -420,24 +430,29 @@ export function PdfPageView({
                   height={bounds.height}
                   fill="none"
                   stroke={annotation.color || '#ff7a59'}
-                  strokeWidth="2"
+                  strokeWidth={annotation.width || 2}
                   vectorEffect="non-scaling-stroke"
                 />
               );
             }
             if (annotation.shape === 'arrow' && annotation.from && annotation.to) {
+              const color = annotation.color || '#ff7a59';
               return (
-                <line
-                  key={`${annotation.id}-arrow`}
-                  x1={annotation.from.x}
-                  y1={annotation.from.y}
-                  x2={annotation.to.x}
-                  y2={annotation.to.y}
-                  stroke={annotation.color || '#ff7a59'}
-                  strokeWidth="2"
-                  vectorEffect="non-scaling-stroke"
-                  markerEnd="url(#pdf-arrow-head)"
-                />
+                <g key={`${annotation.id}-arrow`}>
+                  <line
+                    x1={annotation.from.x}
+                    y1={annotation.from.y}
+                    x2={annotation.to.x}
+                    y2={annotation.to.y}
+                    stroke={color}
+                    strokeWidth={annotation.width || 2}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                  <polygon
+                    points={arrowHeadPoints(annotation.from, annotation.to)}
+                    fill={color}
+                  />
+                </g>
               );
             }
             return null;
@@ -448,8 +463,8 @@ export function PdfPageView({
                 .map((point) => `${point.x},${point.y}`)
                 .join(' ')}
               fill="none"
-              stroke="#5ea7ff"
-              strokeWidth="2.5"
+              stroke={drawColor}
+              strokeWidth={drawWidth}
               strokeLinecap="round"
               strokeLinejoin="round"
               vectorEffect="non-scaling-stroke"
@@ -464,23 +479,28 @@ export function PdfPageView({
                 width={Math.abs(drawDraft.to.x - drawDraft.from.x)}
                 height={Math.abs(drawDraft.to.y - drawDraft.from.y)}
                 fill="none"
-                stroke="#ff7a59"
-                strokeWidth="2"
+                stroke={drawColor}
+                strokeWidth={drawWidth}
                 strokeDasharray="5 4"
                 vectorEffect="non-scaling-stroke"
               />
             ) : (
-              <line
-                x1={drawDraft.from.x}
-                y1={drawDraft.from.y}
-                x2={drawDraft.to.x}
-                y2={drawDraft.to.y}
-                stroke="#ff7a59"
-                strokeWidth="2"
-                strokeDasharray="5 4"
-                vectorEffect="non-scaling-stroke"
-                markerEnd="url(#pdf-arrow-head)"
-              />
+              <g>
+                <line
+                  x1={drawDraft.from.x}
+                  y1={drawDraft.from.y}
+                  x2={drawDraft.to.x}
+                  y2={drawDraft.to.y}
+                  stroke={drawColor}
+                  strokeWidth={drawWidth}
+                  strokeDasharray="5 4"
+                  vectorEffect="non-scaling-stroke"
+                />
+                <polygon
+                  points={arrowHeadPoints(drawDraft.from, drawDraft.to)}
+                  fill={drawColor}
+                />
+              </g>
             )
           ) : null}
         </svg>

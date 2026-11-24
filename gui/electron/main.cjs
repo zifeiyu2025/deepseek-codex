@@ -1708,6 +1708,12 @@ function browserTargetScript(spec) {
     return {
       x: Math.round(rect.left + rect.width / 2),
       y: Math.round(rect.top + rect.height / 2),
+      rect: {
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+      },
       tag: el.tagName.toLowerCase(),
       text: ((el.innerText || el.value || el.getAttribute('aria-label') || '') + '').replace(/\\s+/g, ' ').trim().slice(0, 120),
     };
@@ -2338,6 +2344,41 @@ async function handleBrowserTool(tool, args) {
     const ms = Math.max(100, Math.min(10000, Number(args?.ms) || 1000));
     await new Promise((resolve) => setTimeout(resolve, ms));
     return { type: 'text', text: `已等待 ${ms}ms` };
+  }
+  if (tool === 'browser_element_screenshot') {
+    const target = await guest.executeJavaScript(
+      browserTargetScript({
+        ref: typeof args?.ref === 'string' ? args.ref : '',
+        selector: typeof args?.selector === 'string' ? args.selector : '',
+      }),
+      true,
+    );
+    const viewport = await guest.executeJavaScript(
+      '({width: innerWidth, height: innerHeight})',
+      true,
+    );
+    const rect = target?.rect || {};
+    const x = Math.max(0, Math.floor(Number(rect.x) || 0));
+    const y = Math.max(0, Math.floor(Number(rect.y) || 0));
+    const width = Math.min(
+      Math.max(1, Math.ceil(Number(rect.width) || 0)),
+      Math.max(1, Math.floor(Number(viewport?.width) || 0) - x),
+    );
+    const height = Math.min(
+      Math.max(1, Math.ceil(Number(rect.height) || 0)),
+      Math.max(1, Math.floor(Number(viewport?.height) || 0) - y),
+    );
+    let image = await guest.capturePage({ x, y, width, height });
+    if (image.isEmpty()) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      image = await guest.capturePage({ x, y, width, height });
+    }
+    if (image.isEmpty()) throw new Error('元素截图为空，请稍后重试');
+    return {
+      type: 'image',
+      mimeType: 'image/png',
+      data: image.toPNG().toString('base64'),
+    };
   }
   if (tool === 'browser_screenshot') {
     let image = await guest.capturePage();

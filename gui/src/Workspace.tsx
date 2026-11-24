@@ -55,6 +55,7 @@ type PdfAnnotation = {
   from?: PdfPoint;
   to?: PdfPoint;
   color?: string;
+  width?: number;
   rotation?: number;
 };
 
@@ -172,6 +173,9 @@ function readPdfAnnotations(filePath: string): PdfAnnotation[] {
           ...(from && to ? { from, to } : {}),
           ...(shape ? { shape } : {}),
           ...(color ? { color } : {}),
+          ...(Number(entry.width) >= 1 && Number(entry.width) <= 12
+            ? { width: Number(entry.width) }
+            : {}),
         };
       });
   } catch {
@@ -310,6 +314,8 @@ export function FilesPanel({
   const [pdfRotation, setPdfRotation] = useState(0);
   const [pdfSelectMode, setPdfSelectMode] = useState(false);
   const [pdfDrawTool, setPdfDrawTool] = useState<PdfDrawTool>('none');
+  const [pdfDrawColor, setPdfDrawColor] = useState('#ff7a59');
+  const [pdfDrawWidth, setPdfDrawWidth] = useState(2);
   const [pdfPendingRect, setPdfPendingRect] = useState<PdfRect | null>(null);
   const [pdfPendingText, setPdfPendingText] = useState<{
     text: string;
@@ -445,6 +451,8 @@ export function FilesPanel({
     setPdfRotation(0);
     setPdfSelectMode(false);
     setPdfDrawTool('none');
+    setPdfDrawColor('#ff7a59');
+    setPdfDrawWidth(2);
     setPdfPendingRect(null);
     setPdfPendingText(null);
     setPdfAnnotations(readPdfAnnotations(preview.absolutePath));
@@ -532,7 +540,8 @@ export function FilesPanel({
         from,
         to,
         ...(shape === 'rect' ? { rect } : {}),
-        color: '#ff7a59',
+        color: pdfDrawColor,
+        width: pdfDrawWidth,
         rotation: pdfRotation,
       } as PdfAnnotation,
     ].slice(-100);
@@ -550,7 +559,8 @@ export function FilesPanel({
         at: Date.now(),
         kind: 'ink',
         points: points.slice(0, 1000),
-        color: '#5ea7ff',
+        color: pdfDrawColor,
+        width: pdfDrawWidth,
         rotation: pdfRotation,
       } as PdfAnnotation,
     ].slice(-100);
@@ -796,6 +806,25 @@ export function FilesPanel({
                   <option value="ink">墨迹</option>
                   <option value="erase">橡皮</option>
                 </select>
+                <input
+                  className="pdf-draw-color"
+                  type="color"
+                  value={pdfDrawColor}
+                  aria-label="PDF 绘图颜色"
+                  onChange={(event) => setPdfDrawColor(event.target.value)}
+                />
+                <select
+                  className="pdf-draw-width"
+                  aria-label="PDF 绘图线宽"
+                  value={String(pdfDrawWidth)}
+                  onChange={(event) => setPdfDrawWidth(Number(event.target.value) || 2)}
+                >
+                  <option value="1">1px</option>
+                  <option value="2">2px</option>
+                  <option value="3">3px</option>
+                  <option value="5">5px</option>
+                  <option value="8">8px</option>
+                </select>
                 <button
                   className="rail-text-btn pdf-annotation-toggle"
                   onClick={() => setPdfAnnotationsOpen((open) => !open)}
@@ -819,6 +848,8 @@ export function FilesPanel({
                   onRectSelected={selectPdfRect}
                   onTextSelected={selectPdfText}
                   drawTool={pdfDrawTool}
+                  drawColor={pdfDrawColor}
+                  drawWidth={pdfDrawWidth}
                   onDrawShape={addPdfShape}
                   onDrawInk={addPdfInk}
                   onErase={removePdfAnnotation}
