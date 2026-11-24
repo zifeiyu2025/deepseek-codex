@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: gui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build renderer
+        run: npm run build
+      - name: Build native capture helper
+        run: npm run native:wgc
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-codex-build
+          path: |
+            gui/dist
+            native/wgc-capture/bin/wgc-capture.exe
+          if-no-files-found: error
+          retention-days: 7
