@@ -30,18 +30,20 @@ trap cleanup EXIT
 echo "BUILD_START $(date -u +%FT%TZ)"
 cd "$CODEX_SRC/codex-rs"
 
-PATCH="$ROOT/patches/remove-v8-local.diff"
-if [ -f "$PATCH" ]; then
+for PATCH in "$ROOT"/patches/*.diff; do
+  if [ ! -f "$PATCH" ]; then
+    continue
+  fi
   if git -C "$CODEX_SRC" apply --reverse --check "$PATCH" >/dev/null 2>&1; then
-    echo "PATCH_ALREADY_APPLIED"
+    echo "PATCH_ALREADY_APPLIED:$(basename "$PATCH")"
   elif git -C "$CODEX_SRC" apply --check "$PATCH" >/dev/null 2>&1; then
     git -C "$CODEX_SRC" apply "$PATCH"
-    echo "PATCH_APPLIED"
+    echo "PATCH_APPLIED:$(basename "$PATCH")"
   else
     echo "PATCH_APPLY_FAILED:$PATCH" >&2
     exit 1
   fi
-fi
+done
 
 if ! rustup toolchain list 2>/dev/null | grep -q "^${TOOLCHAIN}-"; then
   rustup toolchain install "$TOOLCHAIN" --profile minimal \
@@ -84,8 +86,8 @@ echo "ENGINE_SHA256:$SRC_SHA"
 CODEX_COMMIT=$(git -C "$CODEX_SRC" rev-parse HEAD 2>/dev/null || echo unknown)
 CODEX_DIRTY=$(git -C "$CODEX_SRC" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
 PATCH_SHA="none"
-if [ -f "$PATCH" ]; then
-  PATCH_SHA=$(sha256sum "$PATCH" | cut -d' ' -f1)
+if compgen -G "$ROOT/patches/*.diff" >/dev/null; then
+  PATCH_SHA=$(sha256sum "$ROOT"/patches/*.diff | sha256sum | cut -d' ' -f1)
 fi
 RUSTC_VERSION=$(rustc +"$TOOLCHAIN" --version 2>/dev/null || echo unknown)
 CARGO_VERSION=$(cargo +"$TOOLCHAIN" --version 2>/dev/null || echo unknown)

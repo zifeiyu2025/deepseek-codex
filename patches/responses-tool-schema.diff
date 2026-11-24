@@ -1,0 +1,440 @@
+diff --git a/codex-rs/app-server/src/lib.rs b/codex-rs/app-server/src/lib.rs
+index ba0ad99..9bf54ab 100644
+--- a/codex-rs/app-server/src/lib.rs
++++ b/codex-rs/app-server/src/lib.rs
+@@ -1571,9 +1571,14 @@ fn test_user_config_file_from_env() -> Option<std::path::PathBuf> {
+ }
+ 
+ fn loader_overrides_with_test_user_config_file(
+-    mut loader_overrides: LoaderOverrides,
++    loader_overrides: LoaderOverrides,
+     test_user_config_file: Option<std::path::PathBuf>,
+ ) -> IoResult<LoaderOverrides> {
++    #[cfg(debug_assertions)]
++    let mut loader_overrides = loader_overrides;
++    #[cfg(not(debug_assertions))]
++    let loader_overrides = loader_overrides;
++
+     #[cfg(debug_assertions)]
+     if let Some(path) = test_user_config_file {
+         let path = AbsolutePathBuf::from_absolute_path(path).map_err(|err| {
+diff --git a/codex-rs/app-server/src/main.rs b/codex-rs/app-server/src/main.rs
+index fe2be58..d0f2fbe 100644
+--- a/codex-rs/app-server/src/main.rs
++++ b/codex-rs/app-server/src/main.rs
+@@ -5,6 +5,7 @@ use codex_app_server::AppServerCodeModeHostArgs;
+ use codex_app_server::AppServerRuntimeOptions;
+ use codex_app_server::AppServerTransport;
+ use codex_app_server::PluginMcpLaunchArgs;
++#[cfg(debug_assertions)]
+ use codex_app_server::PluginStartupTasks;
+ use codex_app_server::run_main_with_transport_options;
+ use codex_arg0::Arg0DispatchPaths;
+@@ -25,7 +26,9 @@ static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+ 
+ // Debug-only test hook: lets integration tests point the server at a temporary
+ // managed config file without writing to /etc.
++#[cfg(debug_assertions)]
+ const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH";
++#[cfg(debug_assertions)]
+ const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
+ 
+ #[derive(Debug, Parser)]
+diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
+index 205cb9f..8b5a451 100644
+--- a/codex-rs/core/src/client.rs
++++ b/codex-rs/core/src/client.rs
+@@ -90,8 +90,10 @@ use codex_protocol::auth::AuthMode;
+ use codex_protocol::ThreadId;
+ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+ use codex_protocol::config_types::Verbosity as VerbosityConfig;
++use codex_protocol::models::ContentItem;
+ use codex_protocol::models::ResponseItem;
+ use codex_protocol::models::ToolResultBody;
++use codex_protocol::models::plaintext_agent_message_content;
+ use codex_protocol::openai_models::ModelInfo;
+ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+ use codex_protocol::protocol::AuthRecoveryEvent;
+@@ -106,6 +108,7 @@ use codex_rollout_trace::InferenceTraceContext;
+ use codex_tools::ToolSpec;
+ use codex_tools::create_tools_json_for_responses_lite;
+ use codex_tools::create_tools_raw_json_for_responses_api;
++use codex_tools::create_tools_raw_json_for_responses_compatible_provider;
+ use eventsource_stream::Event;
+ use eventsource_stream::EventStreamError;
+ use futures::StreamExt;
+@@ -1169,10 +1172,9 @@ impl ModelClient {
+     fn build_ws_client_metadata(
+         &self,
+         responses_metadata: &CodexResponsesMetadata,
+-        include_internal: bool,
+         use_responses_lite: bool,
+     ) -> HashMap<String, String> {
+-        let mut client_metadata = responses_metadata.client_metadata(include_internal);
++        let mut client_metadata = responses_metadata.client_metadata();
+         if use_responses_lite {
+             client_metadata.insert(
+                 WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY.to_string(),
+@@ -1277,8 +1279,13 @@ impl ModelClient {
+                 });
+             }
+             None
+-        } else {
++        } else if is_openai {
+             Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
++        } else {
++            // Third-party Responses-compatible providers do not implement OpenAI's
++            // encrypted tool-argument extension and may omit required arguments when
++            // the marker is present.
++            Some(create_tools_raw_json_for_responses_compatible_provider(&prompt.tools)?.into())
+         };
+         if !prompt.base_instructions.text.is_empty() {
+             let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
+@@ -1363,7 +1370,7 @@ impl ModelClient {
+                 }
+             }
+         }
+-        let client_metadata = responses_metadata.client_metadata(include_internal);
++        let client_metadata = responses_metadata.client_metadata();
+         let request = ResponsesApiRequest {
+             model: model_info.slug.clone(),
+             input,
+@@ -1397,6 +1404,7 @@ impl ModelClient {
+     }
+ 
+     fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
++        let is_openai = self.state.provider.info().is_openai();
+         for item in input {
+             // A provider can echo a bare reserved prefix or return an opaque ID.
+             if item
+@@ -1408,6 +1416,22 @@ impl ModelClient {
+             if !self.state.content_item_kinds_enabled {
+                 item.clear_content_item_kinds();
+             }
++            if !is_openai
++                && let ResponseItem::AgentMessage { content, .. } = item
++                && let Some(text) = plaintext_agent_message_content(content)
++            {
++                // Third-party Responses-compatible providers do not understand the
++                // OpenAI agent_message item type. Preserve its text as a normal user turn.
++                *item = ResponseItem::Message {
++                    encrypted_content: None,
++                    status: None,
++                    id: None,
++                    role: "user".to_string(),
++                    content: vec![ContentItem::InputText { text }],
++                    phase: None,
++                    internal_chat_message_metadata_passthrough: None,
++                };
++            }
+         }
+     }
+ 
+@@ -2476,11 +2500,9 @@ impl ModelClientSession {
+                 }
+             }
+ 
+-            let mut client_metadata = self.client.build_ws_client_metadata(
+-                responses_metadata,
+-                include_internal,
+-                model_info.use_responses_lite,
+-            );
++            let mut client_metadata = self
++                .client
++                .build_ws_client_metadata(responses_metadata, model_info.use_responses_lite);
+             if let Some(turn_state) = self.turn_state.get() {
+                 client_metadata.insert(X_CODEX_TURN_STATE_HEADER.to_string(), turn_state.clone());
+             }
+diff --git a/codex-rs/core/src/client_tests.rs b/codex-rs/core/src/client_tests.rs
+index bfb3733..0bb0445 100644
+--- a/codex-rs/core/src/client_tests.rs
++++ b/codex-rs/core/src/client_tests.rs
+@@ -703,11 +703,8 @@ async fn responses_request_includes_internal_metadata_for_provider_grant_or_firs
+                 serde_json::to_value(&request)?["input"],
+                 expected_wire_input
+             );
+-            let ws_client_metadata = client.build_ws_client_metadata(
+-                &responses_metadata,
+-                include_internal,
+-                responses_lite,
+-            );
++            let ws_client_metadata =
++                client.build_ws_client_metadata(&responses_metadata, responses_lite);
+             let ws_request = codex_api::ResponseCreateWsRequest {
+                 client_metadata: Some(ws_client_metadata),
+                 ..codex_api::ResponseCreateWsRequest::from(&request)
+@@ -1625,11 +1622,8 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
+         TestCodexResponsesRequestKind::Turn,
+     );
+     responses_metadata.history_initialization = Some(HistoryInitialization::WarmFork);
+-    let client_metadata = client.build_ws_client_metadata(
+-        &responses_metadata,
+-        /*include_internal*/ true,
+-        /*use_responses_lite*/ false,
+-    );
++    let client_metadata =
++        client.build_ws_client_metadata(&responses_metadata, /*use_responses_lite*/ false);
+     let parent_thread_id = parent_thread_id.to_string();
+     let turn_metadata: serde_json::Value = serde_json::from_str(
+         client_metadata
+diff --git a/codex-rs/core/src/responses_metadata.rs b/codex-rs/core/src/responses_metadata.rs
+index 25e03bf..35048e2 100644
+--- a/codex-rs/core/src/responses_metadata.rs
++++ b/codex-rs/core/src/responses_metadata.rs
+@@ -358,7 +358,7 @@ impl CodexResponsesMetadata {
+         serde_json::to_value(self.turn_metadata_payload()).ok()
+     }
+ 
+-    pub(crate) fn client_metadata(&self, include_internal: bool) -> HashMap<String, String> {
++    pub(crate) fn client_metadata(&self) -> HashMap<String, String> {
+         let mut client_metadata = HashMap::from([
+             (
+                 X_CODEX_INSTALLATION_ID_HEADER.to_string(),
+diff --git a/codex-rs/core/src/responses_metadata_tests.rs b/codex-rs/core/src/responses_metadata_tests.rs
+index 7c8a900..b8ce10a 100644
+--- a/codex-rs/core/src/responses_metadata_tests.rs
++++ b/codex-rs/core/src/responses_metadata_tests.rs
+@@ -70,7 +70,7 @@ fn turn_metadata_keeps_the_exact_boundary_and_omits_an_overlong_remote() {
+     assert_eq!(boundary.turn_metadata_json().unwrap(), expected);
+ 
+     let over = metadata_with_remote(&format!("{boundary_url}x"));
+-    let body = over.client_metadata(/*include_internal*/ false);
++    let body = over.client_metadata();
+     let canonical = &body[X_CODEX_TURN_METADATA_HEADER];
+     assert_eq!(
+         canonical,
+@@ -107,7 +107,7 @@ fn oversized_remote_preserves_other_metadata_and_short_remote_urls() {
+             functions: BTreeMap::new(),
+         },
+     )]));
+-    let body = metadata.client_metadata(/*include_internal*/ true);
++    let body = metadata.client_metadata();
+     let canonical = &body[X_CODEX_TURN_METADATA_HEADER];
+     assert!(canonical.len() <= MAX_TURN_METADATA_BYTES);
+     assert!(canonical.is_ascii());
+diff --git a/codex-rs/core/src/tools/handlers/multi_agents_v2.rs b/codex-rs/core/src/tools/handlers/multi_agents_v2.rs
+index 8333a10..bec26bd 100644
+--- a/codex-rs/core/src/tools/handlers/multi_agents_v2.rs
++++ b/codex-rs/core/src/tools/handlers/multi_agents_v2.rs
+@@ -54,14 +54,47 @@ pub(crate) async fn emit_sub_agent_activity(
+ fn agent_message_from_tool(
+     message: String,
+     source: &crate::tools::context::ToolCallSource,
++    encrypt_for_openai: bool,
+ ) -> AgentMessage {
+-    if matches!(
+-        source,
+-        crate::tools::context::ToolCallSource::DirectPlaintextMessage
+-            | crate::tools::context::ToolCallSource::CodeMode { .. }
+-    ) {
++    if !encrypt_for_openai
++        || matches!(
++            source,
++            crate::tools::context::ToolCallSource::DirectPlaintextMessage
++                | crate::tools::context::ToolCallSource::CodeMode { .. }
++        )
++    {
+         AgentMessage::Plaintext(message)
+     } else {
+         AgentMessage::Encrypted(message)
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::tools::context::ToolCallSource;
++
++    #[test]
++    fn non_openai_provider_uses_plaintext_agent_messages() {
++        assert!(matches!(
++            agent_message_from_tool(
++                "task".to_string(),
++                &ToolCallSource::Direct,
++                /*encrypt_for_openai*/ false,
++            ),
++            AgentMessage::Plaintext(message) if message == "task"
++        ));
++    }
++
++    #[test]
++    fn openai_provider_keeps_encrypted_function_messages() {
++        assert!(matches!(
++            agent_message_from_tool(
++                "task".to_string(),
++                &ToolCallSource::Direct,
++                /*encrypt_for_openai*/ true,
++            ),
++            AgentMessage::Encrypted(message) if message == "task"
++        ));
++    }
++}
+diff --git a/codex-rs/core/src/tools/handlers/multi_agents_v2/message_tool.rs b/codex-rs/core/src/tools/handlers/multi_agents_v2/message_tool.rs
+index 3e1a3f5..a863b46 100644
+--- a/codex-rs/core/src/tools/handlers/multi_agents_v2/message_tool.rs
++++ b/codex-rs/core/src/tools/handlers/multi_agents_v2/message_tool.rs
+@@ -66,7 +66,11 @@ pub(super) async fn handle_message_string_tool(
+             target: AgentTarget::Id(receiver_thread_id),
+             resume_config,
+             input: AgentInput::Message {
+-                message: agent_message_from_tool(message, &source),
++                message: agent_message_from_tool(
++                    message,
++                    &source,
++                    turn.provider.info().is_openai(),
++                ),
+                 mode,
+                 source_tool_call_id: session
+                     .services
+diff --git a/codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs b/codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs
+index 994861c..2c268bc 100644
+--- a/codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs
++++ b/codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs
+@@ -127,7 +127,11 @@ async fn handle_spawn_agent(
+         &call_id,
+         ThreadSpawnRequest {
+             task_name: args.task_name,
+-            message: agent_message_from_tool(message, &source),
++            message: agent_message_from_tool(
++                message,
++                &source,
++                turn.provider.info().is_openai(),
++            ),
+             fork_mode: fork_mode.clone(),
+             agent_type: args.agent_type.clone(),
+             model: args.model,
+diff --git a/codex-rs/core/src/turn_metadata_tests.rs b/codex-rs/core/src/turn_metadata_tests.rs
+index be05048..23a02fb 100644
+--- a/codex-rs/core/src/turn_metadata_tests.rs
++++ b/codex-rs/core/src/turn_metadata_tests.rs
+@@ -184,7 +184,7 @@ async fn detached_memory_responses_metadata_starts_an_independent_root_turn() {
+     let turn_id = parsed["turn_id"].as_str().expect("memory turn ID");
+     uuid::Uuid::parse_str(turn_id).expect("memory turn ID is a UUID");
+     assert_eq!(parsed[ROOT_TURN_ID_KEY], parsed["turn_id"]);
+-    let client_metadata = metadata.client_metadata(/*include_internal*/ true);
++    let client_metadata = metadata.client_metadata();
+     assert_eq!(
+         client_metadata.get("turn_id").map(String::as_str),
+         Some(turn_id)
+@@ -767,7 +767,7 @@ async fn guardian_affinity_requires_the_captured_parent_and_stays_out_of_metadat
+                 .contains("private-parent-pin")
+         );
+         assert!(
+-            !serde_json::to_string(&metadata.client_metadata(/*include_internal*/ true))
++            !serde_json::to_string(&metadata.client_metadata())
+                 .unwrap()
+                 .contains("private-parent-pin")
+         );
+diff --git a/codex-rs/tools/src/lib.rs b/codex-rs/tools/src/lib.rs
+index 8661659..83c08e9 100644
+--- a/codex-rs/tools/src/lib.rs
++++ b/codex-rs/tools/src/lib.rs
+@@ -113,3 +113,5 @@ pub use tool_spec::ToolSpec;
+ pub use tool_spec::create_tools_json_for_responses_api;
+ pub use tool_spec::create_tools_json_for_responses_lite;
+ pub use tool_spec::create_tools_raw_json_for_responses_api;
++pub use tool_spec::create_tools_raw_json_for_responses_compatible_provider;
++pub use tool_spec::strip_encrypted_tool_markers;
+diff --git a/codex-rs/tools/src/tool_spec.rs b/codex-rs/tools/src/tool_spec.rs
+index 69bd584..9d9d77d 100644
+--- a/codex-rs/tools/src/tool_spec.rs
++++ b/codex-rs/tools/src/tool_spec.rs
+@@ -145,6 +145,39 @@ pub fn create_tools_raw_json_for_responses_api(
+     serde_json::value::to_raw_value(tools).map(Arc::from)
+ }
+ 
++/// Removes the OpenAI-only `encrypted` tool-parameter marker.
++///
++/// Responses-compatible third-party providers accept the surrounding JSON Schema
++/// but do not implement OpenAI's encrypted tool-argument extension. Leaving the
++/// marker in place can cause required encrypted parameters to be omitted by the
++/// model, so non-OpenAI providers should receive the plain schema.
++pub fn strip_encrypted_tool_markers(value: &mut Value) {
++    match value {
++        Value::Object(map) => {
++            map.remove("encrypted");
++            for child in map.values_mut() {
++                strip_encrypted_tool_markers(child);
++            }
++        }
++        Value::Array(items) => {
++            for item in items {
++                strip_encrypted_tool_markers(item);
++            }
++        }
++        _ => {}
++    }
++}
++
++/// Returns raw JSON for Responses-compatible providers that do not support the
++/// OpenAI `encrypted` tool-parameter extension.
++pub fn create_tools_raw_json_for_responses_compatible_provider(
++    tools: &[ToolSpec],
++) -> Result<Arc<RawValue>, serde_json::Error> {
++    let mut value = serde_json::to_value(tools)?;
++    strip_encrypted_tool_markers(&mut value);
++    serde_json::value::to_raw_value(&value).map(Arc::from)
++}
++
+ #[derive(Debug, Clone, Serialize, PartialEq)]
+ pub struct ResponsesApiWebSearchFilters {
+     #[serde(skip_serializing_if = "Option::is_none")]
+diff --git a/codex-rs/tools/src/tool_spec_tests.rs b/codex-rs/tools/src/tool_spec_tests.rs
+index 1f206b2..a572f16 100644
+--- a/codex-rs/tools/src/tool_spec_tests.rs
++++ b/codex-rs/tools/src/tool_spec_tests.rs
+@@ -11,6 +11,7 @@ use crate::ResponsesApiTool;
+ use crate::create_tools_json_for_responses_api;
+ use crate::create_tools_json_for_responses_lite;
+ use crate::create_tools_raw_json_for_responses_api;
++use crate::create_tools_raw_json_for_responses_compatible_provider;
+ use codex_protocol::config_types::WebSearchContextSize;
+ use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
+ use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLocation;
+@@ -269,6 +270,46 @@ fn raw_tool_json_matches_value_encoding() {
+     );
+ }
+ 
++#[test]
++fn responses_compatible_provider_strips_encrypted_tool_markers() {
++    let specs = vec![ToolSpec::Function(ResponsesApiTool {
++        name: "spawn_agent".to_string(),
++        description: "Spawn an agent".to_string(),
++        strict: false,
++        defer_loading: None,
++        parameters: JsonSchema::object(
++            BTreeMap::from([
++                (
++                    "task_name".to_string(),
++                    JsonSchema::string(/*description*/ None),
++                ),
++                (
++                    "message".to_string(),
++                    JsonSchema::string(Some("Initial task".to_string())).with_encrypted(),
++                ),
++            ]),
++            Some(vec!["task_name".to_string(), "message".to_string()]),
++            Some(false.into()),
++        ),
++        output_schema: None,
++    })];
++    let raw = create_tools_raw_json_for_responses_compatible_provider(&specs)
++        .expect("serialize compatible raw tools");
++    let value: serde_json::Value = serde_json::from_str(raw.get()).expect("parse raw tools");
++
++    assert_eq!(
++        value.pointer("/0/parameters/properties/message"),
++        Some(&json!({
++            "type": "string",
++            "description": "Initial task",
++        }))
++    );
++    assert_eq!(
++        value.pointer("/0/parameters/required"),
++        Some(&json!(["task_name", "message"]))
++    );
++}
++
+ #[test]
+ fn namespace_tool_spec_serializes_expected_wire_shape() {
+     assert_eq!(
