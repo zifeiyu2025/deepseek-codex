@@ -1,5 +1,6 @@
 @echo off
-call "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
+if not defined WGC_VCVARS set "WGC_VCVARS=C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
+call "%WGC_VCVARS%" x64
 if errorlevel 1 exit /b 1
 set "SDK_INCLUDE=%WindowsSdkDir%Include\%WindowsSDKVersion%cppwinrt"
 set "INCLUDE=%SDK_INCLUDE%;%INCLUDE%"
