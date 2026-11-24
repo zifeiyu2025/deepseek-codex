@@ -15,6 +15,7 @@
     "test:smoke": "node scripts/e2e-smoke.cjs",
     "test:smoke:auto": "node scripts/run-smoke.cjs",
     "test:computer": "node scripts/verify-computer-tools.cjs",
+    "test:packaged": "node scripts/verify-packaged.cjs",
     "clean:release": "node scripts/clean-release.cjs",
     "dist:win": "npm run build && node scripts/prepare-engine.cjs && electron-builder --win portable"
   },
