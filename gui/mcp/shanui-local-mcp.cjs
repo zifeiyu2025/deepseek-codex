@@ -1785,6 +1785,55 @@ const browserTools = [
     },
   },
   {
+    name: 'browser_dialog',
+    description:
+      'Inspect or handle a pending JavaScript alert/confirm/prompt dialog. Actions: get, accept, dismiss.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['get', 'accept', 'dismiss'] },
+        prompt_text: { type: 'string', description: 'Text for a prompt dialog when accepting' },
+      },
+    },
+  },
+  {
+    name: 'browser_network_log',
+    description:
+      'Return recent page network requests with method, URL, resource type, status, cache flags and duration.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url_contains: { type: 'string' },
+        status: { type: 'number' },
+        limit: { type: 'number', description: 'Maximum entries, defaults to 30' },
+        clear: { type: 'boolean', description: 'Clear the in-memory log after returning' },
+      },
+    },
+  },
+  {
+    name: 'browser_wait_for_response',
+    description: 'Wait until a response matching URL substring and/or HTTP status is observed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url_contains: { type: 'string' },
+        status: { type: 'number' },
+        timeout_ms: { type: 'number', description: 'Defaults to 5000' },
+      },
+    },
+  },
+  {
+    name: 'browser_wait_for_download',
+    description: 'Wait for a completed browser download, optionally matching a filename substring.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filename_contains: { type: 'string' },
+        timeout_ms: { type: 'number', description: 'Defaults to 10000' },
+      },
+    },
+  },
+  {
     name: 'browser_click',
     description:
       'Click an element in the in-app browser by snapshot ref, CSS selector, exact visible text, or viewport coordinates.',

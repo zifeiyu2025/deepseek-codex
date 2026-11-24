@@ -12,11 +12,23 @@ export type PdfRect = {
   height: number;
 };
 
+export type PdfPoint = {
+  x: number;
+  y: number;
+};
+
+export type PdfDrawTool = 'none' | 'rect' | 'arrow' | 'ink' | 'erase';
+
 type PdfPageAction = {
   id: string;
   text: string;
   rect?: PdfRect;
   rects?: PdfRect[];
+  points?: PdfPoint[];
+  shape?: 'rect' | 'arrow';
+  from?: PdfPoint;
+  to?: PdfPoint;
+  color?: string;
 };
 
 function dataUrlToBytes(dataUrl: string) {
@@ -46,6 +58,10 @@ export function PdfPageView({
   onPageCount,
   onRectSelected,
   onTextSelected,
+  drawTool,
+  onDrawShape,
+  onDrawInk,
+  onErase,
 }: {
   dataUrl: string;
   page: number;
@@ -56,6 +72,10 @@ export function PdfPageView({
   onPageCount: (count: number) => void;
   onRectSelected: (rect: PdfRect) => void;
   onTextSelected: (selection: { text: string; rects: PdfRect[] }) => void;
+  drawTool: PdfDrawTool;
+  onDrawShape: (shape: 'rect' | 'arrow', from: PdfPoint, to: PdfPoint) => void;
+  onDrawInk: (points: PdfPoint[]) => void;
+  onErase: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -67,6 +87,16 @@ export function PdfPageView({
   const [containerWidth, setContainerWidth] = useState(0);
   const [pageSize, setPageSize] = useState({ width: 0, height: 0 });
   const [draft, setDraft] = useState<PdfRect | null>(null);
+  type DrawDraft =
+    | { shape: 'rect' | 'arrow'; from: PdfPoint; to: PdfPoint }
+    | { points: PdfPoint[] };
+  const [drawDraft, setDrawDraft] = useState<DrawDraft | null>(null);
+  const drawDraftRef = useRef<DrawDraft | null>(null);
+  const drawStartRef = useRef<PdfPoint | null>(null);
+  const updateDrawDraft = (value: DrawDraft | null) => {
+    drawDraftRef.current = value;
+    setDrawDraft(value);
+  };
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -231,6 +261,101 @@ export function PdfPageView({
     selection.removeAllRanges();
   };
 
+  const graphicalBounds = (annotation: PdfPageAction): PdfRect | null => {
+    if (annotation.points?.length) {
+      const xs = annotation.points.map((point) => point.x);
+      const ys = annotation.points.map((point) => point.y);
+      return {
+        x: Math.min(...xs),
+        y: Math.min(...ys),
+        width: Math.max(...xs) - Math.min(...xs),
+        height: Math.max(...ys) - Math.min(...ys),
+      };
+    }
+    if (annotation.from && annotation.to) {
+      return {
+        x: Math.min(annotation.from.x, annotation.to.x),
+        y: Math.min(annotation.from.y, annotation.to.y),
+        width: Math.abs(annotation.to.x - annotation.from.x),
+        height: Math.abs(annotation.to.y - annotation.from.y),
+      };
+    }
+    return annotation.shape ? annotation.rect || null : null;
+  };
+
+  const startDrawing = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (drawTool === 'none') return;
+    event.preventDefault();
+    const point = pointFromEvent(event);
+    if (drawTool === 'erase') {
+      const target = [...annotations].reverse().find((annotation) => {
+        const bounds = graphicalBounds(annotation);
+        return (
+          bounds &&
+          point.x >= bounds.x - 0.01 &&
+          point.x <= bounds.x + bounds.width + 0.01 &&
+          point.y >= bounds.y - 0.01 &&
+          point.y <= bounds.y + bounds.height + 0.01
+        );
+      });
+      if (target) onErase(target.id);
+      return;
+    }
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      /* synthetic pointers may not support capture */
+    }
+    drawStartRef.current = point;
+    if (drawTool === 'ink') updateDrawDraft({ points: [point] });
+    else updateDrawDraft({ shape: drawTool, from: point, to: point });
+  };
+
+  const updateDrawing = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const start = drawStartRef.current;
+    if (!start) return;
+    const point = pointFromEvent(event);
+    if (drawTool === 'ink') {
+      const current = drawDraftRef.current;
+      if (!current || !('points' in current)) return;
+      const last = current.points[current.points.length - 1];
+      if (last && Math.hypot(point.x - last.x, point.y - last.y) < 0.004) return;
+      updateDrawDraft({ points: [...current.points, point].slice(-1000) });
+      return;
+    }
+    if (drawTool === 'rect' || drawTool === 'arrow') {
+      updateDrawDraft({ shape: drawTool, from: start, to: point });
+    }
+  };
+
+  const finishDrawing = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!drawStartRef.current) return;
+    drawStartRef.current = null;
+    try {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    } catch {
+      /* synthetic pointers may not support capture */
+    }
+    const draftValue = drawDraftRef.current;
+    updateDrawDraft(null);
+    if (!draftValue) return;
+    if ('points' in draftValue) {
+      if (draftValue.points.length > 1) onDrawInk(draftValue.points);
+      return;
+    }
+    const width = Math.abs(draftValue.to.x - draftValue.from.x);
+    const height = Math.abs(draftValue.to.y - draftValue.from.y);
+    if (width + height > 0.01) {
+      onDrawShape(draftValue.shape, draftValue.from, draftValue.to);
+    }
+  };
+
+  useEffect(() => {
+    drawDraftRef.current = null;
+    setDrawDraft(null);
+    drawStartRef.current = null;
+  }, [drawTool, page, rotation]);
+
   if (error) {
     return <div className="files-error">{error}</div>;
   }
@@ -247,6 +372,118 @@ export function PdfPageView({
       >
         <canvas ref={canvasRef} className="pdf-page-canvas" />
         <div ref={textLayerRef} className="pdf-text-layer" />
+        <svg
+          className="pdf-shape-layer"
+          viewBox="0 0 1 1"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <marker
+              id="pdf-arrow-head"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff7a59" />
+            </marker>
+          </defs>
+          {annotations.map((annotation) => {
+            if (annotation.points?.length) {
+              return (
+                <polyline
+                  key={`${annotation.id}-ink`}
+                  points={annotation.points
+                    .map((point) => `${point.x},${point.y}`)
+                    .join(' ')}
+                  fill="none"
+                  stroke={annotation.color || '#5ea7ff'}
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  vectorEffect="non-scaling-stroke"
+                />
+              );
+            }
+            if (annotation.shape === 'rect') {
+              const bounds = graphicalBounds(annotation);
+              if (!bounds) return null;
+              return (
+                <rect
+                  key={`${annotation.id}-rect`}
+                  x={bounds.x}
+                  y={bounds.y}
+                  width={bounds.width}
+                  height={bounds.height}
+                  fill="none"
+                  stroke={annotation.color || '#ff7a59'}
+                  strokeWidth="2"
+                  vectorEffect="non-scaling-stroke"
+                />
+              );
+            }
+            if (annotation.shape === 'arrow' && annotation.from && annotation.to) {
+              return (
+                <line
+                  key={`${annotation.id}-arrow`}
+                  x1={annotation.from.x}
+                  y1={annotation.from.y}
+                  x2={annotation.to.x}
+                  y2={annotation.to.y}
+                  stroke={annotation.color || '#ff7a59'}
+                  strokeWidth="2"
+                  vectorEffect="non-scaling-stroke"
+                  markerEnd="url(#pdf-arrow-head)"
+                />
+              );
+            }
+            return null;
+          })}
+          {drawDraft && 'points' in drawDraft ? (
+            <polyline
+              points={drawDraft.points
+                .map((point) => `${point.x},${point.y}`)
+                .join(' ')}
+              fill="none"
+              stroke="#5ea7ff"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
+              opacity="0.7"
+            />
+          ) : null}
+          {drawDraft && 'shape' in drawDraft ? (
+            drawDraft.shape === 'rect' ? (
+              <rect
+                x={Math.min(drawDraft.from.x, drawDraft.to.x)}
+                y={Math.min(drawDraft.from.y, drawDraft.to.y)}
+                width={Math.abs(drawDraft.to.x - drawDraft.from.x)}
+                height={Math.abs(drawDraft.to.y - drawDraft.from.y)}
+                fill="none"
+                stroke="#ff7a59"
+                strokeWidth="2"
+                strokeDasharray="5 4"
+                vectorEffect="non-scaling-stroke"
+              />
+            ) : (
+              <line
+                x1={drawDraft.from.x}
+                y1={drawDraft.from.y}
+                x2={drawDraft.to.x}
+                y2={drawDraft.to.y}
+                stroke="#ff7a59"
+                strokeWidth="2"
+                strokeDasharray="5 4"
+                vectorEffect="non-scaling-stroke"
+                markerEnd="url(#pdf-arrow-head)"
+              />
+            )
+          ) : null}
+        </svg>
         {annotations.map((annotation) => {
           const rects = annotation.rects?.length
             ? annotation.rects
@@ -305,6 +542,13 @@ export function PdfPageView({
           }}
           onPointerUp={finishSelection}
           onPointerCancel={finishSelection}
+        />
+        <div
+          className={`pdf-draw-surface ${drawTool !== 'none' ? 'active' : ''}`}
+          onPointerDown={startDrawing}
+          onPointerMove={updateDrawing}
+          onPointerUp={finishDrawing}
+          onPointerCancel={finishDrawing}
         />
       </div>
     </div>

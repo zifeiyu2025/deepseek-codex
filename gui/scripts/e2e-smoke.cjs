@@ -301,6 +301,69 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
             textHighlight.stored,
           JSON.stringify({ textSpans, selected, textPending, textInput, textHighlight }),
         );
+        const graphicalPdf = JSON.parse(
+          await evaluate(`(async()=>{
+            const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            const setTool=value=>{
+              const select=document.querySelector('.pdf-draw-tool');
+              const setter=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set;
+              setter.call(select,value);
+              select.dispatchEvent(new Event('change',{bubbles:true}));
+            };
+            const dispatch=(surface,type,x,y)=>surface.dispatchEvent(new PointerEvent(type,{
+              bubbles:true,
+              pointerId:7,
+              isPrimary:true,
+              clientX:surface.getBoundingClientRect().left+surface.getBoundingClientRect().width*x,
+              clientY:surface.getBoundingClientRect().top+surface.getBoundingClientRect().height*y
+            }));
+            setTool('rect');
+            await delay(120);
+            let surface=document.querySelector('.pdf-draw-surface.active');
+            if(!surface) return JSON.stringify({ok:false,stage:'rect-surface'});
+            dispatch(surface,'pointerdown',0.12,0.12);
+            dispatch(surface,'pointermove',0.34,0.32);
+            dispatch(surface,'pointerup',0.34,0.32);
+            await delay(200);
+            setTool('ink');
+            await delay(120);
+            surface=document.querySelector('.pdf-draw-surface.active');
+            if(!surface) return JSON.stringify({ok:false,stage:'ink-surface'});
+            dispatch(surface,'pointerdown',0.12,0.55);
+            dispatch(surface,'pointermove',0.22,0.58);
+            dispatch(surface,'pointermove',0.32,0.54);
+            dispatch(surface,'pointermove',0.42,0.60);
+            dispatch(surface,'pointerup',0.42,0.60);
+            await delay(220);
+            let list=Object.values(JSON.parse(localStorage.getItem('deepseek-codex.pdfAnnotations')||'{}'))[0]||[];
+            const shape=list.some(annotation=>annotation.kind==='shape'&&annotation.shape==='rect');
+            const ink=list.some(annotation=>annotation.kind==='ink'&&annotation.points?.length>2);
+            const shapeNodes=document.querySelectorAll('.pdf-shape-layer rect').length;
+            const inkNodes=document.querySelectorAll('.pdf-shape-layer polyline').length;
+            setTool('erase');
+            await delay(120);
+            surface=document.querySelector('.pdf-draw-surface.active');
+            if(surface) {
+              dispatch(surface,'pointerdown',0.20,0.20);
+              dispatch(surface,'pointerup',0.20,0.20);
+            }
+            await delay(220);
+            list=Object.values(JSON.parse(localStorage.getItem('deepseek-codex.pdfAnnotations')||'{}'))[0]||[];
+            const erased=!list.some(annotation=>annotation.kind==='shape');
+            setTool('none');
+            return JSON.stringify({ok:true,shape,ink,shapeNodes,inkNodes,erased});
+          })()`),
+        );
+        check(
+          'PDF 图形与墨迹批注',
+          graphicalPdf.ok &&
+            graphicalPdf.shape &&
+            graphicalPdf.ink &&
+            graphicalPdf.shapeNodes > 0 &&
+            graphicalPdf.inkNodes > 0 &&
+            graphicalPdf.erased,
+          JSON.stringify(graphicalPdf),
+        );
       }
     } finally {
       if (uiPdf) fs.rmSync(uiPdf, { force: true });
@@ -340,15 +403,27 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
       const listed=await window.codex.request('thread/subagents/list',{
         threadId:created.thread.id
       });
+      let waitedOk=false;
+      try {
+        const waited=await window.codex.request('thread/subagents/wait',{
+          threadId:created.thread.id,
+          agentThreadId:'00000000-0000-0000-0000-000000000001',
+          timeoutMs:100
+        });
+        waitedOk=Boolean(waited)&&waited.timedOut===true&&!waited.agent;
+      } catch {
+        waitedOk=false;
+      }
       return JSON.stringify({
         agents:Array.isArray(listed.agents),
-        count:listed.agents?.length??-1
+        count:listed.agents?.length??-1,
+        waited:waitedOk
       });
     })()`),
   );
   check(
     '子代理管理 RPC',
-    subagentRpc.agents && subagentRpc.count === 0,
+    subagentRpc.agents && subagentRpc.count === 0 && subagentRpc.waited,
     JSON.stringify(subagentRpc),
   );
 
@@ -594,6 +669,7 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
           hover:names.includes('browser_hover'),
           select:names.includes('browser_select'),
           tabs:['browser_tab_list','browser_tab_open','browser_tab_select','browser_tab_close'].every(name=>names.includes(name)),
+          inspect:['browser_dialog','browser_network_log','browser_wait_for_response','browser_wait_for_download'].every(name=>names.includes(name)),
           evalTool:names.includes('browser_eval')
         });
       } finally {
@@ -610,6 +686,7 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
       browserTools.hover &&
       browserTools.select &&
       browserTools.tabs &&
+      browserTools.inspect &&
       !browserTools.evalTool,
     JSON.stringify(browserTools),
   );
@@ -734,7 +811,8 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
       '<!doctype html><title>permission smoke</title><p>permission smoke</p>' +
         '<button aria-label="Smoke Button">Smoke Button</button>' +
         '<label>Smoke Input <input id="smoke-input" placeholder="smoke placeholder"></label>' +
-        '<select aria-label="Smoke Select"><option value="a">Alpha</option><option value="b">Beta</option></select>',
+        '<select aria-label="Smoke Select"><option value="a">Alpha</option><option value="b">Beta</option></select>' +
+        '<button id="dialog-button" onclick="alert(\'smoke-dialog\')">Dialog</button>',
     );
   });
   await new Promise((resolve) => permissionServer.listen(0, resolve));
@@ -872,6 +950,28 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
           const tabSelected=await call('browser_tab_select',{tab_id:opened?.tab?.id});
           const tabClosed=await call('browser_tab_close',{tab_id:opened?.tab?.id});
           const tabsAfter=await call('browser_tab_list',{});
+          await call('browser_navigate',{url:${JSON.stringify(permissionOrigin)}+'/network-smoke'});
+          const responseWait=await call('browser_wait_for_response',{
+            url_contains:'/network-smoke',
+            status:200,
+            timeout_ms:5000
+          });
+          const networkLog=await call('browser_network_log',{
+            url_contains:'/network-smoke',
+            limit:10
+          });
+          await call('browser_navigate',{url:${JSON.stringify(permissionOrigin)}+'/dialog-page'});
+          await new Promise(resolve=>setTimeout(resolve,300));
+          await call('browser_click',{selector:'#dialog-button'});
+          let dialog=null;
+          for(let attempt=0;attempt<20&&!dialog;attempt+=1){
+            await new Promise(resolve=>setTimeout(resolve,100));
+            const current=await call('browser_dialog',{action:'get'});
+            dialog=current?.dialog||null;
+          }
+          const dialogHandled=dialog
+            ? await call('browser_dialog',{action:'accept'})
+            : null;
           return JSON.stringify({
             waited:waited?.matched===true,
             found:found?.elements?.some(element=>element.name.includes('Smoke Button')),
@@ -882,7 +982,10 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
             tabOpened:tabsOpened?.tabs?.some(tab=>tab.id===opened?.tab?.id),
             tabSelected:tabSelected?.tab?.id===opened?.tab?.id,
             tabClosed:tabClosed?.closed?.id===opened?.tab?.id,
-            tabsAfter:Array.isArray(tabsAfter?.tabs)&&!tabsAfter.tabs.some(tab=>tab.id===opened?.tab?.id)
+            tabsAfter:Array.isArray(tabsAfter?.tabs)&&!tabsAfter.tabs.some(tab=>tab.id===opened?.tab?.id),
+            networkWait:responseWait?.response?.status===200,
+            networkLogged:networkLog?.entries?.some(entry=>entry.url.includes('/network-smoke')),
+            dialog:Boolean(dialog&&dialogHandled?.handled==='accept')
           });
         } finally {
           await window.codex.setLocalTools(before);
@@ -900,7 +1003,10 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
         browserApi.tabOpened &&
         browserApi.tabSelected &&
         browserApi.tabClosed &&
-        browserApi.tabsAfter,
+        browserApi.tabsAfter &&
+        browserApi.networkWait &&
+        browserApi.networkLogged &&
+        browserApi.dialog,
       JSON.stringify(browserApi),
     );
   } finally {

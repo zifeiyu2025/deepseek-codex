@@ -1,8 +1,8 @@
 diff --git a/codex-rs/app-server-protocol/src/protocol/common.rs b/codex-rs/app-server-protocol/src/protocol/common.rs
-index ade4a0e..4537a20 100644
+index ade4a0e..69913ee 100644
 --- a/codex-rs/app-server-protocol/src/protocol/common.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/common.rs
-@@ -942,6 +942,16 @@ client_request_definitions! {
+@@ -942,6 +942,21 @@ client_request_definitions! {
          serialization: None,
          response: v2::ThreadTurnsListResponse,
      },
@@ -15,6 +15,11 @@ index ade4a0e..4537a20 100644
 +        params: v2::ThreadSubagentsInterruptParams,
 +        serialization: thread_id(params.thread_id),
 +        response: v2::ThreadSubagentsInterruptResponse,
++    },
++    ThreadSubagentsWait => "thread/subagents/wait" {
++        params: v2::ThreadSubagentsWaitParams,
++        serialization: None,
++        response: v2::ThreadSubagentsWaitResponse,
 +    },
      ThreadItemsList => "thread/items/list" {
          params: v2::ThreadItemsListParams,
@@ -40,10 +45,10 @@ index d9fd755..772fd91 100644
  pub use attestation::*;
  pub use bedrock::*;
 diff --git a/codex-rs/app-server/src/message_processor.rs b/codex-rs/app-server/src/message_processor.rs
-index e2f7362..e8397b6 100644
+index e2f7362..a11daf1 100644
 --- a/codex-rs/app-server/src/message_processor.rs
 +++ b/codex-rs/app-server/src/message_processor.rs
-@@ -1730,6 +1730,14 @@ impl MessageProcessor {
+@@ -1730,6 +1730,17 @@ impl MessageProcessor {
              ClientRequest::ThreadTurnsList { params, .. } => {
                  self.thread_processor.thread_turns_list(params).await
              }
@@ -55,14 +60,17 @@ index e2f7362..e8397b6 100644
 +                    .thread_subagents_interrupt(params)
 +                    .await
 +            }
++            ClientRequest::ThreadSubagentsWait { params, .. } => {
++                self.thread_processor.thread_subagents_wait(params).await
++            }
              ClientRequest::ThreadItemsList { params, .. } => {
                  self.thread_processor
                      .thread_items_list(&request_id, params)
 diff --git a/codex-rs/app-server/src/request_processors/thread_processor.rs b/codex-rs/app-server/src/request_processors/thread_processor.rs
-index 2f12682..a4137d3 100644
+index 2f12682..69a3f74 100644
 --- a/codex-rs/app-server/src/request_processors/thread_processor.rs
 +++ b/codex-rs/app-server/src/request_processors/thread_processor.rs
-@@ -28,7 +28,14 @@ use crate::thread_sample::SampleTask;
+@@ -28,7 +28,16 @@ use crate::thread_sample::SampleTask;
  use crate::thread_sample::SampleThread;
  use crate::thread_sample::generate_sample;
  use codex_app_server_protocol::SelectedCapabilityRoot;
@@ -73,14 +81,27 @@ index 2f12682..a4137d3 100644
 +use codex_app_server_protocol::ThreadSubagentsInterruptResponse;
 +use codex_app_server_protocol::ThreadSubagentsListParams;
 +use codex_app_server_protocol::ThreadSubagentsListResponse;
++use codex_app_server_protocol::ThreadSubagentsWaitParams;
++use codex_app_server_protocol::ThreadSubagentsWaitResponse;
 +use codex_protocol::protocol::AgentStatus;
  use codex_app_server_protocol::ThreadItem;
  use codex_app_server_protocol::ThreadItemOutputDeferral;
  use codex_app_server_protocol::ThreadItemPayload;
-@@ -78,6 +85,33 @@ pub(crate) enum ThreadSearchDelivery {
+@@ -78,6 +87,44 @@ pub(crate) enum ThreadSearchDelivery {
      Streaming,
  }
  
++fn is_terminal_subagent_status(status: &AgentStatus) -> bool {
++    matches!(
++        status,
++        AgentStatus::Completed(_)
++            | AgentStatus::Errored(_)
++            | AgentStatus::Interrupted
++            | AgentStatus::Shutdown
++            | AgentStatus::NotFound
++    )
++}
++
 +fn subagent_info_from_parts(
 +    thread_id: ThreadId,
 +    metadata: codex_core::AgentMetadata,
@@ -111,7 +132,7 @@ index 2f12682..a4137d3 100644
  async fn stage_pending_thread_metadata(
      thread_manager: &ThreadManager,
      thread_store: &dyn ThreadStore,
-@@ -1057,6 +1091,52 @@ impl ThreadRequestProcessor {
+@@ -1057,6 +1104,98 @@ impl ThreadRequestProcessor {
              .map(|response| Some(response.into()))
      }
  
@@ -159,6 +180,52 @@ index 2f12682..a4137d3 100644
 +            }
 +        };
 +        Ok(Some(ThreadSubagentsInterruptResponse { agent }.into()))
++    }
++
++    pub(crate) async fn thread_subagents_wait(
++        &self,
++        params: ThreadSubagentsWaitParams,
++    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
++        let (_, thread) = self.load_thread(&params.thread_id).await?;
++        let agent_thread_id = ThreadId::from_string(&params.agent_thread_id)
++            .map_err(|err| invalid_request(format!("invalid agent thread id: {err}")))?;
++        let timeout_ms = params.timeout_ms.unwrap_or(30_000).min(300_000);
++        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
++        loop {
++            let agents = thread
++                .list_subagents(/*path_prefix*/ None)
++                .await
++                .map_err(|err| internal_error(format!("failed to inspect subagents: {err}")))?;
++            if let Some(agent) = agents
++                .into_iter()
++                .find(|agent| agent.thread_id == agent_thread_id)
++            {
++                let terminal = is_terminal_subagent_status(&agent.status);
++                if terminal || tokio::time::Instant::now() >= deadline {
++                    let info = subagent_info_from_parts(
++                        agent.thread_id,
++                        agent.metadata,
++                        Some(agent.status),
++                    );
++                    return Ok(Some(
++                        ThreadSubagentsWaitResponse {
++                            agent: Some(info),
++                            timed_out: !terminal,
++                        }
++                        .into(),
++                    ));
++                }
++            } else if tokio::time::Instant::now() >= deadline {
++                return Ok(Some(
++                    ThreadSubagentsWaitResponse {
++                        agent: None,
++                        timed_out: true,
++                    }
++                    .into(),
++                ));
++            }
++            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
++        }
 +    }
 +
      pub(crate) async fn thread_items_list(

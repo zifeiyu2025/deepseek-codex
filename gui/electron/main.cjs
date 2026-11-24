@@ -42,6 +42,7 @@ const ALLOWED_METHODS = new Set([
   'thread/items/list',
   'thread/subagents/list',
   'thread/subagents/interrupt',
+  'thread/subagents/wait',
   'thread/prepareApprovedPlan',
   'thread/backgroundTerminals/list',
   'thread/backgroundTerminals/terminate',
@@ -153,6 +154,10 @@ const pendingBrowserPermissionPrompts = new Map();
 const browserPermissionPromptQueue = [];
 let nextBrowserTabsRequestId = 1;
 const pendingBrowserTabsRequests = new Map();
+const browserDebuggerGuests = new Set();
+const browserNetworkStates = new Map();
+const browserPendingDialogs = new Map();
+const browserRecentDownloads = [];
 
 const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 
@@ -286,14 +291,17 @@ function setupDownloadTracking() {
         } catch {
           list = [];
         }
-        list.unshift({
+        const entry = {
           name: path.basename(target),
           url: item.getURL(),
           path: target,
           state,
           size: item.getReceivedBytes(),
           at: Date.now(),
-        });
+        };
+        list.unshift(entry);
+        browserRecentDownloads.unshift(entry);
+        if (browserRecentDownloads.length > 20) browserRecentDownloads.length = 20;
         fs.mkdirSync(path.dirname(downloadsFile()), { recursive: true });
         fs.writeFileSync(downloadsFile(), JSON.stringify(list.slice(0, 100)));
       } catch (error) {
@@ -1142,6 +1150,7 @@ async function browserPermissionRequestAllowed(
 
 function attachBrowserGuest(contents) {
   browserGuest = contents;
+  ensureBrowserDebugger(contents);
   contents.once('destroyed', () => {
     if (browserGuest === contents) browserGuest = null;
   });
@@ -1190,8 +1199,112 @@ async function ensureBrowserGuest() {
   return browserGuest;
 }
 
+function browserNetworkState(guest) {
+  const id = Number(guest?.id || 0);
+  if (!id) return null;
+  let state = browserNetworkStates.get(id);
+  if (!state) {
+    state = { order: [], requests: new Map() };
+    browserNetworkStates.set(id, state);
+  }
+  return state;
+}
+
+function handleBrowserCdpEvent(guestId, method, params) {
+  if (method === 'Page.javascriptDialogOpening') {
+    browserPendingDialogs.set(guestId, {
+      type: params?.type || 'alert',
+      message: params?.message || '',
+      defaultPrompt: params?.defaultPrompt || '',
+      url: params?.url || '',
+      at: Date.now(),
+    });
+    return;
+  }
+  if (method === 'Page.javascriptDialogClosed') {
+    browserPendingDialogs.delete(guestId);
+    return;
+  }
+  const state = browserNetworkStates.get(guestId);
+  if (!state) return;
+  if (method === 'Network.requestWillBeSent') {
+    const requestId = params?.requestId;
+    if (!requestId) return;
+    const entry = {
+      requestId,
+      url: params?.request?.url || '',
+      method: params?.request?.method || 'GET',
+      resourceType: params?.type || '',
+      startedAt: Date.now(),
+      status: null,
+      mimeType: null,
+      fromCache: false,
+      fromServiceWorker: false,
+      durationMs: null,
+      error: null,
+    };
+    state.requests.set(requestId, entry);
+    state.order.push(entry);
+    while (state.order.length > 200) {
+      const removed = state.order.shift();
+      state.requests.delete(removed.requestId);
+    }
+    return;
+  }
+  if (method === 'Network.responseReceived') {
+    const entry = state.requests.get(params?.requestId);
+    if (!entry) return;
+    entry.status = Number(params?.response?.status || 0) || null;
+    entry.mimeType = params?.response?.mimeType || null;
+    entry.fromCache = Boolean(params?.response?.fromDiskCache);
+    entry.fromServiceWorker = Boolean(params?.response?.fromServiceWorker);
+    return;
+  }
+  if (method === 'Network.loadingFinished') {
+    const entry = state.requests.get(params?.requestId);
+    if (entry) entry.durationMs = Date.now() - entry.startedAt;
+    return;
+  }
+  if (method === 'Network.loadingFailed') {
+    const entry = state.requests.get(params?.requestId);
+    if (entry) {
+      entry.error = params?.errorText || 'failed';
+      entry.durationMs = Date.now() - entry.startedAt;
+    }
+  }
+}
+
+function ensureBrowserDebugger(guest) {
+  if (!guest?.debugger) return null;
+  try {
+    if (!guest.debugger.isAttached()) guest.debugger.attach('1.3');
+  } catch {
+    return null;
+  }
+  const guestId = Number(guest.id || 0);
+  if (!guestId) return guest.debugger;
+  if (!browserDebuggerGuests.has(guestId)) {
+    browserDebuggerGuests.add(guestId);
+    browserNetworkState(guest);
+    guest.debugger.on('message', (_event, method, params) => {
+      handleBrowserCdpEvent(guestId, method, params);
+    });
+    guest.debugger.on('detach', () => {
+      browserDebuggerGuests.delete(guestId);
+    });
+    guest.once('destroyed', () => {
+      browserDebuggerGuests.delete(guestId);
+      browserNetworkStates.delete(guestId);
+      browserPendingDialogs.delete(guestId);
+    });
+    guest.debugger.sendCommand('Page.enable').catch(() => null);
+    guest.debugger.sendCommand('Network.enable').catch(() => null);
+  }
+  return guest.debugger;
+}
+
 async function guestInput(guest, method, params) {
-  if (!guest.debugger.isAttached()) guest.debugger.attach('1.3');
+  ensureBrowserDebugger(guest);
   return guest.debugger.sendCommand(method, params);
 }
 
@@ -1913,6 +2026,88 @@ async function handleBrowserTool(tool, args) {
     );
     return { type: 'text', text: JSON.stringify(result, null, 2) };
   }
+  if (tool === 'browser_dialog') {
+    ensureBrowserDebugger(guest);
+    const guestId = Number(guest.id || 0);
+    const action = ['get', 'accept', 'dismiss'].includes(args?.action)
+      ? args.action
+      : 'get';
+    const pending = browserPendingDialogs.get(guestId) || null;
+    if (action === 'get') {
+      return { type: 'text', text: JSON.stringify({ dialog: pending }, null, 2) };
+    }
+    if (!pending) throw new Error('当前没有待处理的页面对话框');
+    await guestInput(guest, 'Page.handleJavaScriptDialog', {
+      accept: action === 'accept',
+      ...(typeof args?.prompt_text === 'string' ? { promptText: args.prompt_text } : {}),
+    });
+    browserPendingDialogs.delete(guestId);
+    return {
+      type: 'text',
+      text: JSON.stringify({ handled: action, dialog: pending }, null, 2),
+    };
+  }
+  if (tool === 'browser_network_log') {
+    ensureBrowserDebugger(guest);
+    const state = browserNetworkState(guest);
+    const urlContains = String(args?.url_contains || '').toLowerCase();
+    const status = Number.isFinite(Number(args?.status)) ? Number(args.status) : null;
+    const limit = Math.max(1, Math.min(100, Number(args?.limit) || 30));
+    const entries = (state?.order || [])
+      .filter(
+        (entry) =>
+          (!urlContains || entry.url.toLowerCase().includes(urlContains)) &&
+          (status === null || entry.status === status),
+      )
+      .slice(-limit);
+    if (args?.clear === true && state) {
+      state.order.length = 0;
+      state.requests.clear();
+    }
+    return { type: 'text', text: JSON.stringify({ entries }, null, 2) };
+  }
+  if (tool === 'browser_wait_for_response') {
+    ensureBrowserDebugger(guest);
+    const urlContains = String(args?.url_contains || '').toLowerCase();
+    const status = Number.isFinite(Number(args?.status)) ? Number(args.status) : null;
+    const timeoutMs = Math.max(100, Math.min(30000, Number(args?.timeout_ms) || 5000));
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const state = browserNetworkState(guest);
+      const match = [...(state?.order || [])]
+        .reverse()
+        .find(
+          (entry) =>
+            entry.status !== null &&
+            (!urlContains || entry.url.toLowerCase().includes(urlContains)) &&
+            (status === null || entry.status === status),
+        );
+      if (match) {
+        return { type: 'text', text: JSON.stringify({ response: match }, null, 2) };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    throw new Error(`等待响应超时（${timeoutMs}ms）`);
+  }
+  if (tool === 'browser_wait_for_download') {
+    const filenameContains = String(args?.filename_contains || '').toLowerCase();
+    const timeoutMs = Math.max(100, Math.min(60000, Number(args?.timeout_ms) || 10000));
+    const since = Date.now() - 2000;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const match = browserRecentDownloads.find(
+        (entry) =>
+          Number(entry.at || 0) >= since &&
+          (!filenameContains ||
+            String(entry.name || '').toLowerCase().includes(filenameContains)),
+      );
+      if (match) {
+        return { type: 'text', text: JSON.stringify({ download: match }, null, 2) };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    throw new Error(`等待下载超时（${timeoutMs}ms）`);
+  }
   if (tool === 'browser_click') {
     const spec = JSON.stringify({
       ref: typeof args?.ref === 'string' ? args.ref : null,
@@ -1946,10 +2141,42 @@ async function handleBrowserTool(tool, args) {
       true,
     );
     await prepareGuestInput(guest);
-    await guestInput(guest, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y });
-    await guestInput(guest, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: target.x, y: target.y, button: 'left', buttons: 1, clickCount: 1 });
-    await guestInput(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: target.x, y: target.y, button: 'left', buttons: 0, clickCount: 1 });
-    return { type: 'text', text: `已点击 ${JSON.stringify({ text: target.text, x: target.x, y: target.y })}` };
+    await Promise.race([
+      (async () => {
+        await guestInput(guest, 'Input.dispatchMouseEvent', {
+          type: 'mouseMoved',
+          x: target.x,
+          y: target.y,
+        });
+        await guestInput(guest, 'Input.dispatchMouseEvent', {
+          type: 'mousePressed',
+          x: target.x,
+          y: target.y,
+          button: 'left',
+          buttons: 1,
+          clickCount: 1,
+        });
+        await guestInput(guest, 'Input.dispatchMouseEvent', {
+          type: 'mouseReleased',
+          x: target.x,
+          y: target.y,
+          button: 'left',
+          buttons: 0,
+          clickCount: 1,
+        });
+      })(),
+      new Promise((resolve) => setTimeout(resolve, 1500)),
+    ]);
+    const dialog = browserPendingDialogs.get(Number(guest.id || 0)) || null;
+    return {
+      type: 'text',
+      text: `已点击 ${JSON.stringify({
+        text: target.text,
+        x: target.x,
+        y: target.y,
+        ...(dialog ? { dialog: dialog.type } : {}),
+      })}`,
+    };
   }
   if (tool === 'browser_type') {
     const nextText = typeof args?.text === 'string' ? args.text : '';

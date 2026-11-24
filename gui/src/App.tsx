@@ -3335,6 +3335,13 @@ export default function App() {
               threadId: threadRef.current,
               agentThreadId: agent.id,
             });
+            await window.codex
+              .request('thread/subagents/wait', {
+                threadId: threadRef.current,
+                agentThreadId: agent.id,
+                timeoutMs: 3000,
+              })
+              .catch(() => null);
             stopped += 1;
             return;
           } catch {

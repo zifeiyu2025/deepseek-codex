@@ -31,7 +31,12 @@ import type { BrowserTabsRequest, FileContent, FileEntry } from './types';
 import { friendlyClientError } from './lib/errors';
 import { readStorage, writeStorage } from './lib/storage';
 import { Modal } from './components/Modal';
-import { PdfPageView, type PdfRect } from './PdfPageView';
+import {
+  PdfPageView,
+  type PdfDrawTool,
+  type PdfPoint,
+  type PdfRect,
+} from './PdfPageView';
 
 const BROWSER_HISTORY_KEY = 'deepseek-codex.browserHistory';
 const PDF_ANNOTATIONS_KEY = 'deepseek-codex.pdfAnnotations';
@@ -41,10 +46,15 @@ type PdfAnnotation = {
   page: number;
   text: string;
   at: number;
-  kind?: 'note' | 'highlight' | 'text';
+  kind?: 'note' | 'highlight' | 'text' | 'shape' | 'ink';
   rect?: PdfRect;
   rects?: PdfRect[];
   anchorText?: string;
+  points?: PdfPoint[];
+  shape?: 'rect' | 'arrow';
+  from?: PdfPoint;
+  to?: PdfPoint;
+  color?: string;
   rotation?: number;
 };
 
@@ -77,6 +87,22 @@ function validPdfRect(value: any): PdfRect | undefined {
   return rect;
 }
 
+function validPdfPoint(value: any): PdfPoint | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const point = { x: Number(value.x), y: Number(value.y) };
+  if (
+    !Number.isFinite(point.x) ||
+    !Number.isFinite(point.y) ||
+    point.x < 0 ||
+    point.y < 0 ||
+    point.x > 1 ||
+    point.y > 1
+  ) {
+    return undefined;
+  }
+  return point;
+}
+
 function readPdfAnnotations(filePath: string): PdfAnnotation[] {
   try {
     const map = JSON.parse(readStorage(PDF_ANNOTATIONS_KEY) || '{}');
@@ -104,7 +130,29 @@ function readPdfAnnotations(filePath: string): PdfAnnotation[] {
           typeof entry.anchorText === 'string'
             ? entry.anchorText.slice(0, 2000)
             : '';
-        const kind = rects.length ? 'text' : rect ? 'highlight' : 'note';
+        const points = Array.isArray(entry.points)
+          ? entry.points
+              .map(validPdfPoint)
+              .filter((value: PdfPoint | undefined): value is PdfPoint => Boolean(value))
+              .slice(0, 1000)
+          : [];
+        const from = validPdfPoint(entry.from);
+        const to = validPdfPoint(entry.to);
+        const shape =
+          entry.shape === 'rect' || entry.shape === 'arrow' ? entry.shape : undefined;
+        const color =
+          typeof entry.color === 'string' && /^#[0-9a-f]{6}$/i.test(entry.color)
+            ? entry.color
+            : undefined;
+        const kind = points.length
+          ? 'ink'
+          : shape
+            ? 'shape'
+            : rects.length
+              ? 'text'
+              : rect
+                ? 'highlight'
+                : 'note';
         return {
           id:
             typeof entry.id === 'string' && entry.id
@@ -120,6 +168,10 @@ function readPdfAnnotations(filePath: string): PdfAnnotation[] {
           ...(rect ? { rect } : {}),
           ...(rects.length ? { rects } : {}),
           ...(anchorText ? { anchorText } : {}),
+          ...(points.length ? { points } : {}),
+          ...(from && to ? { from, to } : {}),
+          ...(shape ? { shape } : {}),
+          ...(color ? { color } : {}),
         };
       });
   } catch {
@@ -257,6 +309,7 @@ export function FilesPanel({
   const [pdfZoom, setPdfZoom] = useState(1);
   const [pdfRotation, setPdfRotation] = useState(0);
   const [pdfSelectMode, setPdfSelectMode] = useState(false);
+  const [pdfDrawTool, setPdfDrawTool] = useState<PdfDrawTool>('none');
   const [pdfPendingRect, setPdfPendingRect] = useState<PdfRect | null>(null);
   const [pdfPendingText, setPdfPendingText] = useState<{
     text: string;
@@ -391,6 +444,7 @@ export function FilesPanel({
     setPdfZoom(1);
     setPdfRotation(0);
     setPdfSelectMode(false);
+    setPdfDrawTool('none');
     setPdfPendingRect(null);
     setPdfPendingText(null);
     setPdfAnnotations(readPdfAnnotations(preview.absolutePath));
@@ -457,6 +511,50 @@ export function FilesPanel({
     setPdfPendingRect(null);
     setPdfAnnotationsOpen(true);
     setPdfAnnotationText(selection.text);
+  };
+
+  const addPdfShape = (shape: 'rect' | 'arrow', from: PdfPoint, to: PdfPoint) => {
+    const rect: PdfRect = {
+      x: Math.min(from.x, to.x),
+      y: Math.min(from.y, to.y),
+      width: Math.abs(to.x - from.x),
+      height: Math.abs(to.y - from.y),
+    };
+    const next = [
+      ...pdfAnnotations,
+      {
+        id: `pdf-shape-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+        page: pdfPage,
+        text: shape === 'rect' ? '矩形批注' : '箭头批注',
+        at: Date.now(),
+        kind: 'shape',
+        shape,
+        from,
+        to,
+        ...(shape === 'rect' ? { rect } : {}),
+        color: '#ff7a59',
+        rotation: pdfRotation,
+      } as PdfAnnotation,
+    ].slice(-100);
+    persistPdfAnnotations(next);
+  };
+
+  const addPdfInk = (points: PdfPoint[]) => {
+    if (points.length < 2) return;
+    const next = [
+      ...pdfAnnotations,
+      {
+        id: `pdf-ink-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+        page: pdfPage,
+        text: '墨迹批注',
+        at: Date.now(),
+        kind: 'ink',
+        points: points.slice(0, 1000),
+        color: '#5ea7ff',
+        rotation: pdfRotation,
+      } as PdfAnnotation,
+    ].slice(-100);
+    persistPdfAnnotations(next);
   };
 
   const removePdfAnnotation = (id: string) => {
@@ -670,6 +768,7 @@ export function FilesPanel({
                   aria-pressed={pdfSelectMode}
                   onClick={() => {
                     setPdfSelectMode((value) => !value);
+                    setPdfDrawTool('none');
                     setPdfPendingRect(null);
                     setPdfPendingText(null);
                   }}
@@ -677,6 +776,26 @@ export function FilesPanel({
                 >
                   框选
                 </button>
+                <select
+                  className="pdf-draw-tool"
+                  aria-label="PDF 绘图工具"
+                  value={pdfDrawTool}
+                  onChange={(event) => {
+                    const tool = event.target.value as PdfDrawTool;
+                    setPdfDrawTool(tool);
+                    if (tool !== 'none') {
+                      setPdfSelectMode(false);
+                      setPdfPendingRect(null);
+                      setPdfPendingText(null);
+                    }
+                  }}
+                >
+                  <option value="none">绘图：关</option>
+                  <option value="rect">矩形</option>
+                  <option value="arrow">箭头</option>
+                  <option value="ink">墨迹</option>
+                  <option value="erase">橡皮</option>
+                </select>
                 <button
                   className="rail-text-btn pdf-annotation-toggle"
                   onClick={() => setPdfAnnotationsOpen((open) => !open)}
@@ -699,6 +818,10 @@ export function FilesPanel({
                   onPageCount={handlePdfPageCount}
                   onRectSelected={selectPdfRect}
                   onTextSelected={selectPdfText}
+                  drawTool={pdfDrawTool}
+                  onDrawShape={addPdfShape}
+                  onDrawInk={addPdfInk}
+                  onErase={removePdfAnnotation}
                 />
               </div>
               {pdfAnnotationsOpen ? (
@@ -763,9 +886,15 @@ export function FilesPanel({
                               第 {annotation.page} 页
                               {annotation.kind === 'text'
                                 ? ' · 文本'
-                                : annotation.rect
-                                  ? ' · 区域'
-                                  : ''}
+                                : annotation.kind === 'shape'
+                                  ? annotation.shape === 'arrow'
+                                    ? ' · 箭头'
+                                    : ' · 矩形'
+                                  : annotation.kind === 'ink'
+                                    ? ' · 墨迹'
+                                    : annotation.rect
+                                      ? ' · 区域'
+                                      : ''}
                             </span>
                             <p>{annotation.text}</p>
                           </button>

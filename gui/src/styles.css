@@ -3725,6 +3725,29 @@ pre::-webkit-scrollbar-button,
   color: transparent;
 }
 
+.pdf-shape-layer {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.pdf-draw-surface {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  pointer-events: none;
+}
+
+.pdf-draw-surface.active {
+  pointer-events: auto;
+  cursor: crosshair;
+  touch-action: none;
+}
+
 .pdf-highlight-box {
   position: absolute;
   z-index: 3;
@@ -3766,6 +3789,15 @@ pre::-webkit-scrollbar-button,
   border-color: rgba(255, 196, 67, 0.5);
   background: rgba(255, 196, 67, 0.13);
   color: var(--ink);
+}
+
+.pdf-draw-tool {
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #111113;
+  color: var(--ink-dim);
+  font-size: 10px;
 }
 
 .pdf-pending-rect {
