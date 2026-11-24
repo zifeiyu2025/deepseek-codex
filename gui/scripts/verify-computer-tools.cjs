@@ -13,12 +13,22 @@ const mcp = spawn(process.execPath, [path.join(__dirname, '..', 'mcp', 'shanui-l
     ...process.env,
     SHANUI_ENABLE_COMPUTER: '1',
     SHANUI_COMPUTER_ALLOWED_APPS: JSON.stringify(['notepad']),
+    SHANUI_WGC_CAPTURE: path.join(
+      __dirname,
+      '..',
+      '..',
+      'native',
+      'wgc-capture',
+      'bin',
+      'wgc-capture.exe',
+    ),
   },
 });
 
 let nextId = 1;
 let buffer = '';
 const pending = new Map();
+mcp.stderr.on('data', (chunk) => process.stderr.write(chunk));
 mcp.stdout.on('data', (chunk) => {
   buffer += chunk.toString('utf8');
   let index;
@@ -83,6 +93,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     );
     const screenshot = state.screenshots?.[0];
     if (!screenshot?.id || !screenshot.width) throw new Error('window screenshot missing');
+    if (screenshot.captureMethod !== 'wgc') {
+      throw new Error(`expected WGC capture, got ${screenshot.captureMethod || 'unknown'}`);
+    }
     const bodyX = Math.max(40, Math.round(screenshot.width * 0.5));
     const bodyY = Math.max(40, Math.round(screenshot.height * 0.35));
     await tool('computer_click', {
@@ -126,7 +139,11 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         {
           ok: true,
           window: { id: rehydrated.id, title: rehydrated.title, app: rehydrated.app },
-          screenshot: { width: screenshot.width, height: screenshot.height },
+          screenshot: {
+            width: screenshot.width,
+            height: screenshot.height,
+            captureMethod: screenshot.captureMethod,
+          },
           typed: true,
           screenshotId: screenshot.id,
         },

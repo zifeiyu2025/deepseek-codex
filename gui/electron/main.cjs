@@ -233,6 +233,22 @@ function computerHistoryFile() {
   return path.join(app.getPath('userData'), 'computer-history.json');
 }
 
+function resolveWgcCapture() {
+  const candidates = [
+    process.env.SHANUI_WGC_CAPTURE,
+    path.join(process.resourcesPath || '', 'native', 'wgc-capture.exe'),
+    path.join(ROOT, '..', 'native', 'wgc-capture', 'bin', 'wgc-capture.exe'),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      /* try next */
+    }
+  }
+  return '';
+}
+
 function downloadsFile() {
   return path.join(app.getPath('userData'), 'browser-downloads.json');
 }
@@ -516,6 +532,7 @@ function localMcpServerConfig(prefs) {
       SHANUI_LOCAL_TOOLS_FILE: localToolsPrefsFile(),
       SHANUI_BROWSER_FULL_CDP: prefs.browserFullCdp ? '1' : '0',
       SHANUI_COMPUTER_HISTORY_FILE: computerHistoryFile(),
+      SHANUI_WGC_CAPTURE: resolveWgcCapture(),
     },
     ...(() => {
       const approvals = {};

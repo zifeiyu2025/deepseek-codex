@@ -8,6 +8,9 @@
 # Upstream engine source (nested git repo, fetched and patched separately)
 /codex-src/
 
+# Native helper build output
+/native/wgc-capture/bin/
+
 # GUI dependencies and packaged output
 /gui/node_modules/
 /gui/dist/

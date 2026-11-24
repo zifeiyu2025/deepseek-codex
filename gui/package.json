@@ -1,6 +1,6 @@
 {
   "name": "deepseek-codex-gui",
-  "version": "0.45.55",
+  "version": "0.45.56",
   "private": true,
   "description": "Independent desktop GUI for the locally built Codex app-server, defaulting to DeepSeek.",
   "author": "local",
@@ -16,8 +16,9 @@
     "test:smoke:auto": "node scripts/run-smoke.cjs",
     "test:computer": "node scripts/verify-computer-tools.cjs",
     "test:packaged": "node scripts/verify-packaged.cjs",
+    "native:wgc": "node scripts/prepare-native.cjs",
     "clean:release": "node scripts/clean-release.cjs",
-    "dist:win": "npm run build && node scripts/prepare-engine.cjs && electron-builder --win portable"
+    "dist:win": "npm run build && node scripts/prepare-native.cjs && node scripts/prepare-engine.cjs && electron-builder --win portable"
   },
   "build": {
     "appId": "local.deepseek.codex",
@@ -46,6 +47,10 @@
       {
         "from": "mcp",
         "to": "mcp"
+      },
+      {
+        "from": "../native/wgc-capture/bin/wgc-capture.exe",
+        "to": "native/wgc-capture.exe"
       }
     ],
     "asarUnpack": [
