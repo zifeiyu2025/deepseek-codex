@@ -1,6 +1,6 @@
 {
   "name": "deepseek-codex-gui",
-  "version": "0.45.51",
+  "version": "0.45.52",
   "private": true,
   "description": "Independent desktop GUI for the locally built Codex app-server, defaulting to DeepSeek.",
   "author": "local",
@@ -14,6 +14,7 @@
     "app": "electron .",
     "test:smoke": "node scripts/e2e-smoke.cjs",
     "test:smoke:auto": "node scripts/run-smoke.cjs",
+    "test:computer": "node scripts/verify-computer-tools.cjs",
     "clean:release": "node scripts/clean-release.cjs",
     "dist:win": "npm run build && node scripts/prepare-engine.cjs && electron-builder --win portable"
   },

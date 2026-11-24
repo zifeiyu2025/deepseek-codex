@@ -22,6 +22,42 @@ function getJson(url) {
   });
 }
 
+async function evaluateCdpTarget(target, expression) {
+  const socket = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    socket.addEventListener('open', resolve, { once: true });
+    socket.addEventListener('error', reject, { once: true });
+  });
+  try {
+    const id = 1;
+    const response = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('guest evaluate timeout')), 5000);
+      socket.addEventListener('message', (event) => {
+        const message = JSON.parse(event.data);
+        if (message.id !== id) return;
+        clearTimeout(timer);
+        resolve(message);
+      });
+      socket.send(
+        JSON.stringify({
+          id,
+          method: 'Runtime.evaluate',
+          params: { expression, awaitPromise: true, returnByValue: true },
+        }),
+      );
+    });
+    if (response.result?.exceptionDetails) {
+      throw new Error(
+        response.result.exceptionDetails.exception?.description ||
+          response.result.exceptionDetails.text,
+      );
+    }
+    return response.result?.result?.value;
+  } finally {
+    socket.close();
+  }
+}
+
 (async () => {
   const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
   const page = targets.find((target) => target.type === 'page' && target.url.includes('index.html'));
@@ -605,6 +641,56 @@ function getJson(url) {
   );
   await sleep(1200);
   check('内置浏览器挂载', await evaluate("!!document.querySelector('.browser-frame')"));
+  const permissionServer = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    response.end('<!doctype html><title>permission smoke</title><p>permission smoke</p>');
+  });
+  await new Promise((resolve) => permissionServer.listen(0, '127.0.0.1', resolve));
+  const permissionOrigin = `http://127.0.0.1:${permissionServer.address().port}`;
+  try {
+    await evaluate(`window.codex.browserSetSitePermissions({
+      origins:[${JSON.stringify(permissionOrigin)}],
+      permissions:['notifications','geolocation'],
+      enabled:true
+    })`);
+    await evaluate(
+      `window.dispatchEvent(new CustomEvent('deepseek-codex:browser-open',{detail:{url:${JSON.stringify(permissionOrigin)}}})); true`,
+    );
+    let guestTarget = null;
+    for (let attempt = 0; attempt < 66 && !guestTarget; attempt += 1) {
+      await sleep(150);
+      const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
+      guestTarget = targets.find(
+        (target) =>
+          target.webSocketDebuggerUrl &&
+          target.url.startsWith(permissionOrigin),
+      );
+    }
+    let notification = '';
+    let geolocation = '';
+    if (guestTarget) {
+      notification = await evaluateCdpTarget(
+        guestTarget,
+        "Notification.requestPermission()",
+      );
+      geolocation = await evaluateCdpTarget(
+        guestTarget,
+        "navigator.permissions.query({name:'geolocation'}).then(p=>p.state)",
+      );
+    }
+    check(
+      '浏览器站点权限生效',
+      Boolean(guestTarget) && notification === 'granted' && geolocation === 'granted',
+      JSON.stringify({ guest: Boolean(guestTarget), notification, geolocation }),
+    );
+  } finally {
+    await evaluate(`window.codex.browserSetSitePermissions({
+      origins:[${JSON.stringify(permissionOrigin)}],
+      permissions:['notifications','geolocation'],
+      enabled:false
+    })`).catch(() => null);
+    await new Promise((resolve) => permissionServer.close(resolve));
+  }
 
   await evaluate(
     "(()=>{const trigger=document.querySelector('.thread-heading-actions button'); if(!trigger) return false; trigger.focus(); trigger.click(); return true;})()",

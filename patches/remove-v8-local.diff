@@ -1,8 +1,8 @@
 diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
-index 5f4bd80..8a89dd1 100644
+index 9973736..d256356 100644
 --- a/codex-rs/Cargo.lock
 +++ b/codex-rs/Cargo.lock
-@@ -546,7 +546,7 @@ dependencies = [
+@@ -547,7 +547,7 @@ dependencies = [
   "futures-lite",
   "parking",
   "polling",
@@ -11,7 +11,7 @@ index 5f4bd80..8a89dd1 100644
   "slab",
   "windows-sys 0.61.2",
  ]
-@@ -577,7 +577,7 @@ dependencies = [
+@@ -578,7 +578,7 @@ dependencies = [
   "cfg-if",
   "event-listener",
   "futures-lite",
@@ -20,7 +20,7 @@ index 5f4bd80..8a89dd1 100644
  ]
  
  [[package]]
-@@ -603,7 +603,7 @@ dependencies = [
+@@ -604,7 +604,7 @@ dependencies = [
   "cfg-if",
   "futures-core",
   "futures-io",
@@ -29,7 +29,7 @@ index 5f4bd80..8a89dd1 100644
   "signal-hook-registry",
   "slab",
   "windows-sys 0.61.2",
-@@ -1262,26 +1262,6 @@ dependencies = [
+@@ -1263,26 +1263,6 @@ dependencies = [
   "serde",
  ]
  
@@ -56,7 +56,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "bit-set"
  version = "0.5.3"
-@@ -1580,16 +1560,6 @@ version = "0.1.1"
+@@ -1581,16 +1561,6 @@ version = "0.1.1"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
  
@@ -73,7 +73,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "caseless"
  version = "0.2.2"
-@@ -1641,15 +1611,6 @@ dependencies = [
+@@ -1642,15 +1612,6 @@ dependencies = [
   "subtle",
  ]
  
@@ -89,7 +89,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "cfg-expr"
  version = "0.20.9"
-@@ -1771,17 +1732,6 @@ dependencies = [
+@@ -1772,17 +1733,6 @@ dependencies = [
   "inout 0.2.2",
  ]
  
@@ -107,7 +107,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "clap"
  version = "4.5.58"
-@@ -2690,7 +2640,7 @@ dependencies = [
+@@ -2692,7 +2642,7 @@ dependencies = [
   "unicode-segmentation",
   "url",
   "vt100",
@@ -116,7 +116,7 @@ index 5f4bd80..8a89dd1 100644
   "windows-sys 0.61.2",
   "wiremock",
   "zstd 0.13.3",
-@@ -2856,38 +2806,6 @@ dependencies = [
+@@ -2858,38 +2808,6 @@ dependencies = [
   "uuid",
  ]
  
@@ -155,7 +155,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "codex-code-mode-protocol"
  version = "0.0.0"
-@@ -2906,28 +2824,6 @@ dependencies = [
+@@ -2908,30 +2826,6 @@ dependencies = [
   "tonic-prost-build",
  ]
  
@@ -174,7 +174,9 @@ index 5f4bd80..8a89dd1 100644
 - "futures",
 - "opentelemetry",
 - "pretty_assertions",
+- "serde",
 - "serde_json",
+- "serde_with",
 - "tokio",
 - "tokio-util",
 - "tracing",
@@ -184,7 +186,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "codex-collaboration-mode-templates"
  version = "0.0.0"
-@@ -3193,7 +3089,7 @@ dependencies = [
+@@ -3198,7 +3092,7 @@ dependencies = [
   "url",
   "uuid",
   "walkdir",
@@ -193,7 +195,7 @@ index 5f4bd80..8a89dd1 100644
   "whoami 1.6.1",
   "windows-sys 0.61.2",
   "wiremock",
-@@ -3420,7 +3316,7 @@ dependencies = [
+@@ -3426,7 +3320,7 @@ dependencies = [
   "pretty_assertions",
   "prost",
   "rcgen",
@@ -202,7 +204,7 @@ index 5f4bd80..8a89dd1 100644
   "rustls",
   "serde",
   "serde_json",
-@@ -3693,7 +3589,7 @@ dependencies = [
+@@ -3699,7 +3593,7 @@ dependencies = [
   "codex-utils-absolute-path",
   "codex-utils-path-uri",
   "futures",
@@ -211,7 +213,7 @@ index 5f4bd80..8a89dd1 100644
   "serde",
   "tokio",
  ]
-@@ -4136,7 +4032,7 @@ dependencies = [
+@@ -4142,7 +4036,7 @@ dependencies = [
   "libc",
   "pretty_assertions",
   "rand 0.9.3",
@@ -220,7 +222,7 @@ index 5f4bd80..8a89dd1 100644
   "seccompiler",
   "serde",
   "serde_json",
-@@ -4159,7 +4055,7 @@ dependencies = [
+@@ -4165,7 +4059,7 @@ dependencies = [
   "serde_json",
   "tokio",
   "tracing",
@@ -229,7 +231,7 @@ index 5f4bd80..8a89dd1 100644
   "wiremock",
  ]
  
-@@ -4927,7 +4823,7 @@ dependencies = [
+@@ -4967,7 +4861,7 @@ dependencies = [
   "urlencoding",
   "uuid",
   "webbrowser",
@@ -238,7 +240,7 @@ index 5f4bd80..8a89dd1 100644
   "windows-sys 0.61.2",
   "wiremock",
  ]
-@@ -5038,7 +4934,7 @@ dependencies = [
+@@ -5078,7 +4972,7 @@ dependencies = [
   "tempfile",
   "tokio",
   "tracing",
@@ -247,7 +249,7 @@ index 5f4bd80..8a89dd1 100644
  ]
  
  [[package]]
-@@ -5082,7 +4978,7 @@ dependencies = [
+@@ -5122,7 +5016,7 @@ dependencies = [
   "tree-sitter-bash",
   "tree-sitter-powershell",
   "url",
@@ -256,7 +258,7 @@ index 5f4bd80..8a89dd1 100644
  ]
  
  [[package]]
-@@ -5439,7 +5335,7 @@ dependencies = [
+@@ -5493,7 +5387,7 @@ dependencies = [
   "vt100",
   "vtparse",
   "webbrowser",
@@ -265,7 +267,7 @@ index 5f4bd80..8a89dd1 100644
   "windows-sys 0.61.2",
   "winsplit",
   "wiremock",
-@@ -5800,14 +5696,6 @@ dependencies = [
+@@ -5855,14 +5749,6 @@ dependencies = [
   "pretty_assertions",
  ]
  
@@ -280,7 +282,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "codex-voice-host"
  version = "0.0.0"
-@@ -6238,15 +6126,6 @@ version = "0.8.7"
+@@ -6292,15 +6178,6 @@ version = "0.8.7"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
  
@@ -296,7 +298,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "core_test_support"
  version = "0.0.0"
-@@ -6463,7 +6342,7 @@ dependencies = [
+@@ -6517,7 +6394,7 @@ dependencies = [
   "futures-core",
   "mio",
   "parking_lot",
@@ -305,7 +307,7 @@ index 5f4bd80..8a89dd1 100644
   "signal-hook",
   "signal-hook-mio",
   "winapi",
-@@ -6962,12 +6841,6 @@ version = "0.3.2"
+@@ -7016,12 +6893,6 @@ version = "0.3.2"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "5729f5117e208430e437df2f4843f5e5952997175992d1414f94c57d61e270b4"
  
@@ -318,7 +320,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "der"
  version = "0.7.10"
-@@ -7134,38 +7007,6 @@ dependencies = [
+@@ -7188,38 +7059,6 @@ dependencies = [
   "zeroize",
  ]
  
@@ -357,7 +359,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "dirs"
  version = "6.0.0"
-@@ -7711,7 +7552,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -7765,7 +7604,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "0ce92ff622d6dadf7349484f42c93271a0d49b7cc4d466a936405bacbe10aa78"
  dependencies = [
   "cfg-if",
@@ -366,7 +368,7 @@ index 5f4bd80..8a89dd1 100644
   "windows-sys 0.59.0",
  ]
  
-@@ -7968,16 +7809,6 @@ dependencies = [
+@@ -8022,16 +7861,6 @@ dependencies = [
   "libc",
  ]
  
@@ -383,7 +385,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "futures"
  version = "0.3.34"
-@@ -8131,7 +7962,7 @@ version = "1.1.0"
+@@ -8185,7 +8014,7 @@ version = "1.1.0"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
  dependencies = [
@@ -392,7 +394,7 @@ index 5f4bd80..8a89dd1 100644
   "windows-link",
  ]
  
-@@ -9059,15 +8890,6 @@ dependencies = [
+@@ -9113,15 +8942,6 @@ dependencies = [
   "system-deps",
  ]
  
@@ -408,7 +410,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "h2"
  version = "0.4.19"
-@@ -9677,28 +9499,6 @@ dependencies = [
+@@ -9731,28 +9551,6 @@ dependencies = [
   "cc",
  ]
  
@@ -437,7 +439,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "icu_collections"
  version = "2.2.0"
-@@ -10133,15 +9933,6 @@ version = "1.70.2"
+@@ -10187,15 +9985,6 @@ version = "1.70.2"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
  
@@ -453,7 +455,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "itertools"
  version = "0.14.0"
-@@ -10166,12 +9957,6 @@ version = "1.0.17"
+@@ -10220,12 +10009,6 @@ version = "1.0.17"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
  
@@ -466,7 +468,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "jiff"
  version = "0.2.38"
-@@ -10542,12 +10327,6 @@ dependencies = [
+@@ -10596,12 +10379,6 @@ dependencies = [
   "libc",
  ]
  
@@ -479,7 +481,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "linux-raw-sys"
  version = "0.12.1"
-@@ -12252,7 +12031,7 @@ dependencies = [
+@@ -12327,7 +12104,7 @@ dependencies = [
   "concurrent-queue",
   "hermit-abi",
   "pin-project-lite",
@@ -488,7 +490,7 @@ index 5f4bd80..8a89dd1 100644
   "windows-sys 0.61.2",
  ]
  
-@@ -13576,16 +13355,6 @@ dependencies = [
+@@ -13651,16 +13428,6 @@ dependencies = [
   "web-sys",
  ]
  
@@ -505,7 +507,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "resolv-conf"
  version = "0.7.6"
-@@ -14063,19 +13832,6 @@ dependencies = [
+@@ -14138,19 +13905,6 @@ dependencies = [
   "nom 7.1.3",
  ]
  
@@ -525,7 +527,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "rustix"
  version = "1.1.4"
-@@ -14085,7 +13841,7 @@ dependencies = [
+@@ -14160,7 +13914,7 @@ dependencies = [
   "bitflags 2.13.1",
   "errno",
   "libc",
@@ -534,7 +536,7 @@ index 5f4bd80..8a89dd1 100644
   "windows-sys 0.61.2",
  ]
  
-@@ -15423,15 +15179,6 @@ dependencies = [
+@@ -15498,15 +15252,6 @@ dependencies = [
   "serde_json",
  ]
  
@@ -550,7 +552,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "streaming-iterator"
  version = "0.1.9"
-@@ -15823,44 +15570,10 @@ dependencies = [
+@@ -15898,44 +15643,10 @@ dependencies = [
   "fastrand",
   "getrandom 0.4.2",
   "once_cell",
@@ -596,7 +598,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "termcolor"
  version = "1.4.1"
-@@ -15878,7 +15591,7 @@ checksum = "9048a889effe34a5cddee0af7f53285198b16dca3be510858d38dfdb3e62a04e"
+@@ -15953,7 +15664,7 @@ checksum = "9048a889effe34a5cddee0af7f53285198b16dca3be510858d38dfdb3e62a04e"
  dependencies = [
   "bitflags 2.13.1",
   "parking_lot",
@@ -605,7 +607,7 @@ index 5f4bd80..8a89dd1 100644
   "signal-hook",
   "windows-sys 0.61.2",
  ]
-@@ -15889,7 +15602,7 @@ version = "0.4.3"
+@@ -15964,7 +15675,7 @@ version = "0.4.3"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "60b8cb979cb11c32ce1603f8137b22262a9d131aaa5c37b5678025f22b8becd0"
  dependencies = [
@@ -614,7 +616,7 @@ index 5f4bd80..8a89dd1 100644
   "windows-sys 0.60.2",
  ]
  
-@@ -16183,18 +15896,6 @@ dependencies = [
+@@ -16258,18 +15969,6 @@ dependencies = [
   "time-core",
  ]
  
@@ -633,7 +635,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "tiny_http"
  version = "0.12.0"
-@@ -17110,22 +16811,6 @@ dependencies = [
+@@ -17185,22 +16884,6 @@ dependencies = [
   "wasm-bindgen",
  ]
  
@@ -656,7 +658,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "valuable"
  version = "0.1.1"
-@@ -17382,7 +17067,7 @@ checksum = "fee64194ccd96bf648f42a65a7e589547096dfa702f7cadef84347b66ad164f9"
+@@ -17457,7 +17140,7 @@ checksum = "fee64194ccd96bf648f42a65a7e589547096dfa702f7cadef84347b66ad164f9"
  dependencies = [
   "cc",
   "downcast-rs",
@@ -665,7 +667,7 @@ index 5f4bd80..8a89dd1 100644
   "smallvec",
   "wayland-sys",
  ]
-@@ -17394,7 +17079,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -17469,7 +17152,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "b8e6faa537fbb6c186cb9f1d41f2f811a4120d1b57ec61f50da451a0c5122bec"
  dependencies = [
   "bitflags 2.13.1",
@@ -674,7 +676,7 @@ index 5f4bd80..8a89dd1 100644
   "wayland-backend",
   "wayland-scanner",
  ]
-@@ -17594,18 +17279,6 @@ dependencies = [
+@@ -17669,18 +17352,6 @@ dependencies = [
   "wezterm-dynamic",
  ]
  
@@ -693,7 +695,7 @@ index 5f4bd80..8a89dd1 100644
  [[package]]
  name = "which"
  version = "8.0.0"
-@@ -17613,7 +17286,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -17688,7 +17359,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "d3fabb953106c3c8eea8306e4393700d7657561cb43122571b172bbfb7c7ba1d"
  dependencies = [
   "env_home",
@@ -702,7 +704,7 @@ index 5f4bd80..8a89dd1 100644
   "winsafe",
  ]
  
-@@ -18296,7 +17969,7 @@ dependencies = [
+@@ -18371,7 +18042,7 @@ dependencies = [
   "libc",
   "log",
   "os_pipe",
@@ -711,7 +713,7 @@ index 5f4bd80..8a89dd1 100644
   "thiserror 2.0.18",
   "tree_magic_mini",
   "wayland-backend",
-@@ -18318,7 +17991,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -18393,7 +18064,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "9993aa5be5a26815fe2c3eacfc1fde061fc1a1f094bf1ad2a18bf9c495dd7414"
  dependencies = [
   "gethostname",
@@ -720,7 +722,7 @@ index 5f4bd80..8a89dd1 100644
   "x11rb-protocol",
  ]
  
-@@ -18635,19 +18308,6 @@ version = "1.0.19"
+@@ -18710,19 +18381,6 @@ version = "1.0.19"
  source = "registry+https://github.com/rust-lang/crates.io-index"
  checksum = "3ff05f8caa9038894637571ae6b9e29466c1f4f829d26c9b28f869a29cbe3445"
  
@@ -741,7 +743,7 @@ index 5f4bd80..8a89dd1 100644
  name = "zopfli"
  version = "0.8.3"
 diff --git a/codex-rs/Cargo.toml b/codex-rs/Cargo.toml
-index b2a33d8..0ddbc77 100644
+index 46b3c13..7596c14 100644
 --- a/codex-rs/Cargo.toml
 +++ b/codex-rs/Cargo.toml
 @@ -29,9 +29,7 @@ members = [
@@ -762,7 +764,7 @@ index b2a33d8..0ddbc77 100644
      "websocket-auth",
      "websocket-client",
      "windows-sandbox-rs/tests/support",
-@@ -219,7 +216,6 @@ codex-cloud-tasks-client = { path = "cloud-tasks-client" }
+@@ -221,7 +218,6 @@ codex-cloud-tasks-client = { path = "cloud-tasks-client" }
  codex-cloud-tasks-mock-client = { path = "cloud-tasks-mock-client" }
  codex-code-mode = { path = "code-mode" }
  codex-code-mode-protocol = { path = "code-mode-protocol" }
@@ -770,7 +772,7 @@ index b2a33d8..0ddbc77 100644
  codex-plugin-host = { path = "plugin-host" }
  codex-home = { path = "codex-home" }
  codex-http-client = { path = "http-client" }
-@@ -578,7 +574,6 @@ unicode-width = "0.2"
+@@ -583,7 +579,6 @@ unicode-width = "0.2"
  url = "2"
  urlencoding = "2.1"
  uuid = "1"
@@ -778,7 +780,7 @@ index b2a33d8..0ddbc77 100644
  vt100 = "0.16.2"
  vtparse = "0.6.2"
  walkdir = "2.5.0"
-@@ -698,7 +693,6 @@ sqlx-core = { git = "https://github.com/transact-rs/sqlx", rev = "10462fa4414c6c
+@@ -703,7 +698,6 @@ sqlx-core = { git = "https://github.com/transact-rs/sqlx", rev = "10462fa4414c6c
  sqlx-sqlite = { git = "https://github.com/transact-rs/sqlx", rev = "10462fa4414c6c7f1ed1d39bb31678e3b726878c" }
  tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "7a920470d62138955446b64220c7609e46ad770e" }
  tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "e19950ef7828cb311e6d51a6bedcebf0192e055c" }

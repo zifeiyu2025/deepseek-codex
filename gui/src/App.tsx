@@ -246,6 +246,7 @@ export default function App() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [subagentPanelOpen, setSubagentPanelOpen] = useState(false);
   const [subagentParentId, setSubagentParentId] = useState<string | null>(null);
+  const [subagentMetadata, setSubagentMetadata] = useState<Record<string, ThreadSummary>>({});
   const [threadQuery, setThreadQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [readStates, setReadStates] = useState<Record<string, ThreadReadState>>({});
@@ -3122,7 +3123,7 @@ export default function App() {
     [resumeThread],
   );
 
-  const subagents = useMemo<ThreadSummary[]>(() => {
+  const subagentItems = useMemo<ThreadSummary[]>(() => {
     const map = new Map<string, ThreadSummary>();
     for (const item of items) {
       if (item.type === 'collabAgentToolCall') {
@@ -3179,6 +3180,63 @@ export default function App() {
     }
     return [...map.values()];
   }, [items, threadId]);
+
+  const subagentIds = useMemo(
+    () => [...new Set(subagentItems.map((agent) => agent.id))].slice(0, 100),
+    [subagentItems],
+  );
+  const subagentIdsKey = subagentIds.join(',');
+
+  useEffect(() => {
+    if (!subagentIds.length) {
+      setSubagentMetadata((previous) =>
+        Object.keys(previous).length ? {} : previous,
+      );
+      return undefined;
+    }
+    let cancelled = false;
+    window.codex
+      .request('thread/list', {
+        includedThreadIds: subagentIds,
+        limit: subagentIds.length,
+        sortKey: 'updated_at',
+        sortDirection: 'desc',
+        useStateDbOnly: true,
+      })
+      .then((response) => {
+        if (cancelled) return;
+        const next: Record<string, ThreadSummary> = {};
+        for (const thread of response?.data || []) {
+          if (thread?.id) next[thread.id] = thread;
+        }
+        setSubagentMetadata(next);
+      })
+      .catch(() => {
+        /* subagent metadata is best-effort */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [subagentIdsKey]);
+
+  const subagents = useMemo<ThreadSummary[]>(
+    () =>
+      subagentItems.map((agent) => {
+        const metadata = subagentMetadata[agent.id] || {};
+        return {
+          ...metadata,
+          ...agent,
+          preview: agent.preview || metadata.preview,
+          model: agent.model || metadata.model,
+          agentNickname: agent.agentNickname || metadata.agentNickname,
+          agentRole: agent.agentRole || metadata.agentRole,
+          reasoningEffort: metadata.reasoningEffort ?? agent.reasoningEffort,
+          updatedAt: agent.updatedAt || metadata.updatedAt,
+          status: agent.status ?? metadata.status,
+        };
+      }),
+    [subagentItems, subagentMetadata],
+  );
 
   useEffect(() => {
     subagentsRef.current = subagents;
@@ -4967,8 +5025,16 @@ export default function App() {
                     </span>
                     <span className="subagent-state">{subagentStatusLabel(agent.status)}</span>
                     <small>
-                      {agent.agentRole || agent.model || ''}
-                      {agent.updatedAt ? ` · ${timeAgo(agent.updatedAt)}` : ''}
+                      {[
+                        agent.agentRole,
+                        agent.model,
+                        agent.reasoningEffort
+                          ? `${effortLabel(agent.reasoningEffort)}推理`
+                          : '',
+                        agent.updatedAt ? timeAgo(agent.updatedAt) : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
                     </small>
                   </button>
                 ))

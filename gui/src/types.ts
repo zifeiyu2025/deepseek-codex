@@ -54,6 +54,7 @@ export type ThreadSummary = {
   parentThreadId?: string | null;
   agentNickname?: string | null;
   agentRole?: string | null;
+  reasoningEffort?: string | null;
   threadSource?: string | null;
   turns?: Turn[];
 };

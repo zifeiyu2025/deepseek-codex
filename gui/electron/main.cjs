@@ -1586,7 +1586,7 @@ async function handleBrowserTool(tool, args) {
       noLink: true,
       title: '确认上传文件',
       message: `允许 AI 将 ${files.length} 个文件上传到 ${site}？`,
-      detail: `文件：${fileNames.slice(0, 8).join('、')}${fileNames.length > 8 ? '…' : ''}\n\n上传会将本地文件内容发送到该网站。`,
+      detail: `文件：\n${files.slice(0, 8).join('\n')}${files.length > 8 ? '\n…' : ''}\n\n上传会将本地文件内容发送到该网站。`,
     });
     if (confirmation.response !== 0) throw new Error('已取消文件上传');
     const marker = crypto.randomBytes(8).toString('hex');

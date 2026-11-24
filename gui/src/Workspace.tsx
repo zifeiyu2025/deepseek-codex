@@ -43,6 +43,7 @@ type PdfAnnotation = {
   at: number;
   kind?: 'note' | 'highlight';
   rect?: PdfRect;
+  rotation?: number;
 };
 
 function pdfAnnotationKey(filePath: string) {
@@ -100,6 +101,9 @@ function readPdfAnnotations(filePath: string): PdfAnnotation[] {
           text: entry.text.slice(0, 2000),
           at: Number(entry.at) || Date.now(),
           kind: rect ? 'highlight' : 'note',
+          rotation: [0, 90, 180, 270].includes(Number(entry.rotation))
+            ? Number(entry.rotation)
+            : 0,
           ...(rect ? { rect } : {}),
         };
       });
@@ -405,6 +409,7 @@ export function FilesPanel({
         text: text.slice(0, 2000),
         at: Date.now(),
         kind: rect ? 'highlight' : 'note',
+        rotation: pdfRotation,
         ...(rect ? { rect } : {}),
       } as PdfAnnotation,
     ].slice(-100);
@@ -651,7 +656,9 @@ export function FilesPanel({
                   rotation={pdfRotation}
                   selecting={pdfSelectMode}
                   annotations={pdfAnnotations.filter(
-                    (annotation) => annotation.page === pdfPage,
+                    (annotation) =>
+                      annotation.page === pdfPage &&
+                      (annotation.rotation ?? 0) === pdfRotation,
                   )}
                   onPageCount={handlePdfPageCount}
                   onRectSelected={selectPdfRect}
@@ -698,7 +705,12 @@ export function FilesPanel({
                         <div className="pdf-annotation-row" key={annotation.id}>
                           <button
                             className="pdf-annotation-text"
-                            onClick={() => jumpPdfPage(annotation.page)}
+                            onClick={() => {
+                              jumpPdfPage(annotation.page);
+                              if (annotation.rotation !== undefined) {
+                                setPdfRotation(annotation.rotation);
+                              }
+                            }}
                             title={`跳到第 ${annotation.page} 页`}
                           >
                             <span>
