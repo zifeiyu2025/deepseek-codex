@@ -1213,7 +1213,7 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
   await sleep(200);
   const slashMenu = JSON.parse(
     await evaluate(
-      "JSON.stringify({count:document.querySelectorAll('.slash-item').length,titles:[...document.querySelectorAll('.slash-item strong')].map(e=>e.textContent),active:document.querySelector('.slash-item.active code')?.textContent})",
+      "JSON.stringify({count:document.querySelectorAll('.slash-item').length,titles:[...document.querySelectorAll('.slash-item strong')].map(e=>e.textContent),active:document.querySelector('.slash-item.active code')?.textContent,menu:(()=>{const e=document.querySelector('.slash-menu');return e?{clientHeight:e.clientHeight,scrollHeight:e.scrollHeight}:null})()})",
     ),
   );
   check(
@@ -1222,6 +1222,13 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
       slashMenu.titles.includes('计划模式') &&
       slashMenu.titles.includes('设置目标'),
     JSON.stringify(slashMenu),
+  );
+  check(
+    '斜杠命令完整显示',
+    slashMenu.count >= 19 &&
+      slashMenu.menu &&
+      slashMenu.menu.scrollHeight <= slashMenu.menu.clientHeight + 1,
+    JSON.stringify({ count: slashMenu.count, menu: slashMenu.menu }),
   );
   await pressComposer('ArrowDown');
   check('斜杠命令键盘选择', (await evaluate("document.querySelector('.slash-item.active code')?.textContent")) === '/goal');

@@ -10,6 +10,7 @@ const {
   Tray,
   Menu,
   nativeImage,
+  screen,
   session,
   webContents,
 } = require('electron');
@@ -176,7 +177,7 @@ function configureUserData() {
   const legacyDirs = [path.join(appData, 'DeepSeek Codex'), path.join(appData, 'deepseek-codex-gui')];
   for (const legacy of legacyDirs) {
     if (path.resolve(legacy) === path.resolve(target)) continue;
-    for (const name of ['deepseek.key', 'window-state.json', 'Local State']) {
+    for (const name of ['deepseek.key', 'Local State']) {
       const source = path.join(legacy, name);
       const destination = path.join(target, name);
       try {
@@ -2933,7 +2934,12 @@ function windowStateFile() {
 }
 
 function loadWindowState() {
-  const fallback = { width: 1280, height: 840, maximized: false };
+  const workArea = screen.getPrimaryDisplay().workAreaSize;
+  const fallback = {
+    width: Math.min(1360, Math.max(1020, workArea.width - 80)),
+    height: Math.min(920, Math.max(680, workArea.height - 80)),
+    maximized: false,
+  };
   try {
     const saved = JSON.parse(fs.readFileSync(windowStateFile(), 'utf8'));
     const width = Number(saved.width);
