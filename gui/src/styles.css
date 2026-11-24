@@ -3674,12 +3674,60 @@ pre::-webkit-scrollbar-button,
 }
 
 .pdf-page-canvas {
+  position: relative;
+  z-index: 0;
   display: block;
   background: #fff;
 }
 
+.pdf-text-layer {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  transform-origin: 0 0;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+}
+
+.pdf-text-layer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+  user-select: text;
+}
+
+.pdf-text-layer > :not(.markedContent),
+.pdf-text-layer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x))
+    scale(var(--min-font-size-inv));
+}
+
+.pdf-text-layer .markedContent {
+  display: contents;
+}
+
+.pdf-text-layer ::selection {
+  background: rgba(255, 196, 67, 0.38);
+  color: transparent;
+}
+
 .pdf-highlight-box {
   position: absolute;
+  z-index: 3;
   border: 1px solid rgba(255, 196, 67, 0.92);
   border-radius: 2px;
   background: rgba(255, 204, 70, 0.28);
@@ -3694,11 +3742,14 @@ pre::-webkit-scrollbar-button,
 
 .pdf-select-surface {
   position: absolute;
+  z-index: 4;
   inset: 0;
+  pointer-events: none;
 }
 
 .pdf-select-surface.active {
   background: rgba(110, 168, 254, 0.04);
+  pointer-events: auto;
   cursor: crosshair;
   touch-action: none;
 }

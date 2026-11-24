@@ -41,8 +41,10 @@ type PdfAnnotation = {
   page: number;
   text: string;
   at: number;
-  kind?: 'note' | 'highlight';
+  kind?: 'note' | 'highlight' | 'text';
   rect?: PdfRect;
+  rects?: PdfRect[];
+  anchorText?: string;
   rotation?: number;
 };
 
@@ -92,6 +94,17 @@ function readPdfAnnotations(filePath: string): PdfAnnotation[] {
       .slice(0, 100)
       .map((entry: any, index: number) => {
         const rect = validPdfRect(entry.rect);
+        const rects = Array.isArray(entry.rects)
+          ? entry.rects
+              .map(validPdfRect)
+              .filter((value: PdfRect | undefined): value is PdfRect => Boolean(value))
+              .slice(0, 200)
+          : [];
+        const anchorText =
+          typeof entry.anchorText === 'string'
+            ? entry.anchorText.slice(0, 2000)
+            : '';
+        const kind = rects.length ? 'text' : rect ? 'highlight' : 'note';
         return {
           id:
             typeof entry.id === 'string' && entry.id
@@ -100,11 +113,13 @@ function readPdfAnnotations(filePath: string): PdfAnnotation[] {
           page: entry.page,
           text: entry.text.slice(0, 2000),
           at: Number(entry.at) || Date.now(),
-          kind: rect ? 'highlight' : 'note',
+          kind,
           rotation: [0, 90, 180, 270].includes(Number(entry.rotation))
             ? Number(entry.rotation)
             : 0,
           ...(rect ? { rect } : {}),
+          ...(rects.length ? { rects } : {}),
+          ...(anchorText ? { anchorText } : {}),
         };
       });
   } catch {
@@ -243,6 +258,10 @@ export function FilesPanel({
   const [pdfRotation, setPdfRotation] = useState(0);
   const [pdfSelectMode, setPdfSelectMode] = useState(false);
   const [pdfPendingRect, setPdfPendingRect] = useState<PdfRect | null>(null);
+  const [pdfPendingText, setPdfPendingText] = useState<{
+    text: string;
+    rects: PdfRect[];
+  } | null>(null);
   const [pdfAnnotations, setPdfAnnotations] = useState<PdfAnnotation[]>([]);
   const [pdfAnnotationText, setPdfAnnotationText] = useState('');
   const [pdfAnnotationsOpen, setPdfAnnotationsOpen] = useState(true);
@@ -373,6 +392,7 @@ export function FilesPanel({
     setPdfRotation(0);
     setPdfSelectMode(false);
     setPdfPendingRect(null);
+    setPdfPendingText(null);
     setPdfAnnotations(readPdfAnnotations(preview.absolutePath));
     setPdfAnnotationText('');
     setPdfAnnotationsOpen(true);
@@ -390,6 +410,7 @@ export function FilesPanel({
     setPdfPage(page);
     setPdfPageInput(String(page));
     setPdfPendingRect(null);
+    setPdfPendingText(null);
   };
 
   const persistPdfAnnotations = (next: PdfAnnotation[]) => {
@@ -398,9 +419,10 @@ export function FilesPanel({
   };
 
   const addPdfAnnotation = () => {
-    const text = pdfAnnotationText.trim();
+    const text = pdfAnnotationText.trim() || pdfPendingText?.text.trim() || '';
     if (!text) return;
     const rect = pdfPendingRect;
+    const rects = pdfPendingText?.rects || [];
     const next = [
       ...pdfAnnotations,
       {
@@ -408,20 +430,33 @@ export function FilesPanel({
         page: pdfPage,
         text: text.slice(0, 2000),
         at: Date.now(),
-        kind: rect ? 'highlight' : 'note',
+        kind: rects.length ? 'text' : rect ? 'highlight' : 'note',
         rotation: pdfRotation,
         ...(rect ? { rect } : {}),
+        ...(rects.length ? { rects } : {}),
+        ...(pdfPendingText?.text
+          ? { anchorText: pdfPendingText.text.slice(0, 2000) }
+          : {}),
       } as PdfAnnotation,
     ].slice(-100);
     persistPdfAnnotations(next);
     setPdfAnnotationText('');
     setPdfPendingRect(null);
+    setPdfPendingText(null);
     setPdfSelectMode(false);
   };
 
   const selectPdfRect = (rect: PdfRect) => {
     setPdfPendingRect(rect);
+    setPdfPendingText(null);
     setPdfAnnotationsOpen(true);
+  };
+
+  const selectPdfText = (selection: { text: string; rects: PdfRect[] }) => {
+    setPdfPendingText(selection);
+    setPdfPendingRect(null);
+    setPdfAnnotationsOpen(true);
+    setPdfAnnotationText(selection.text);
   };
 
   const removePdfAnnotation = (id: string) => {
@@ -636,8 +671,9 @@ export function FilesPanel({
                   onClick={() => {
                     setPdfSelectMode((value) => !value);
                     setPdfPendingRect(null);
+                    setPdfPendingText(null);
                   }}
-                  title="在页面上拖拽框选区域"
+                  title="在页面上拖拽框选区域；直接拖选文字可添加正文高亮"
                 >
                   框选
                 </button>
@@ -662,20 +698,24 @@ export function FilesPanel({
                   )}
                   onPageCount={handlePdfPageCount}
                   onRectSelected={selectPdfRect}
+                  onTextSelected={selectPdfText}
                 />
               </div>
               {pdfAnnotationsOpen ? (
                 <div className="pdf-annotations">
                   <div className="pdf-annotation-form">
                     <span className="pdf-annotation-page">第 {pdfPage} 页</span>
-                    {pdfPendingRect ? (
+                    {pdfPendingRect || pdfPendingText ? (
                       <span className="pdf-pending-rect">
-                        区域
+                        {pdfPendingText ? '文本' : '区域'}
                         <button
                           type="button"
                           className="icon-button"
-                          aria-label="取消区域选择"
-                          onClick={() => setPdfPendingRect(null)}
+                          aria-label="取消选区"
+                          onClick={() => {
+                            setPdfPendingRect(null);
+                            setPdfPendingText(null);
+                          }}
                         >
                           <X size={10} />
                         </button>
@@ -684,7 +724,13 @@ export function FilesPanel({
                     <input
                       className="setting-input"
                       value={pdfAnnotationText}
-                      placeholder={pdfPendingRect ? '为框选区域添加批注' : '添加页级批注'}
+                      placeholder={
+                        pdfPendingText
+                          ? '为选中文字添加批注'
+                          : pdfPendingRect
+                            ? '为框选区域添加批注'
+                            : '添加页级批注'
+                      }
                       onChange={(event) => setPdfAnnotationText(event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') addPdfAnnotation();
@@ -692,7 +738,7 @@ export function FilesPanel({
                     />
                     <button
                       className="settings-button"
-                      disabled={!pdfAnnotationText.trim()}
+                      disabled={!pdfAnnotationText.trim() && !pdfPendingText}
                       onClick={addPdfAnnotation}
                     >
                       <Plus size={13} />
@@ -715,7 +761,11 @@ export function FilesPanel({
                           >
                             <span>
                               第 {annotation.page} 页
-                              {annotation.rect ? ' · 区域' : ''}
+                              {annotation.kind === 'text'
+                                ? ' · 文本'
+                                : annotation.rect
+                                  ? ' · 区域'
+                                  : ''}
                             </span>
                             <p>{annotation.text}</p>
                           </button>

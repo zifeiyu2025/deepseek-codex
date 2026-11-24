@@ -252,6 +252,55 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
           pageTwo === '2' && zoom && zoom !== '100%' && pending && highlight.boxes > 0 && highlight.stored,
           JSON.stringify({ pageTwo, zoom, pending, highlight }),
         );
+        let textSpans = 0;
+        for (let attempt = 0; attempt < 40 && textSpans === 0; attempt += 1) {
+          await sleep(150);
+          textSpans = Number(
+            await evaluate(
+              "document.querySelectorAll('.pdf-text-layer span').length",
+            ),
+          );
+        }
+        const selected = await evaluate(`(()=>{
+          const spans=[...document.querySelectorAll('.pdf-text-layer span')]
+            .filter(span=>span.firstChild && span.textContent.trim());
+          if(!spans.length) return false;
+          const range=document.createRange();
+          range.setStart(spans[0].firstChild,0);
+          range.setEnd(spans[spans.length-1].firstChild,spans[spans.length-1].firstChild.length);
+          const selection=window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          document.querySelector('.pdf-page-sheet')?.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+          return true;
+        })()`);
+        await sleep(250);
+        const textPending = await evaluate(
+          "document.querySelector('.pdf-pending-rect')?.textContent?.includes('文本')||false",
+        );
+        const textInput = await evaluate(
+          "document.querySelector('.pdf-annotation-form input.setting-input')?.value||''",
+        );
+        await evaluate(
+          "[...document.querySelectorAll('.pdf-annotation-form .settings-button')][0]?.click(); true",
+        );
+        await sleep(350);
+        const textHighlight = JSON.parse(
+          await evaluate(`JSON.stringify({
+            boxes:document.querySelectorAll('.pdf-highlight-box:not(.draft)').length,
+            stored:(localStorage.getItem('deepseek-codex.pdfAnnotations')||'').includes('"kind":"text"')
+          })`),
+        );
+        check(
+          'PDF 文本锚定批注',
+          textSpans > 0 &&
+            selected &&
+            textPending &&
+            textInput.includes('Smoke PDF Page 2') &&
+            textHighlight.boxes > 1 &&
+            textHighlight.stored,
+          JSON.stringify({ textSpans, selected, textPending, textInput, textHighlight }),
+        );
       }
     } finally {
       if (uiPdf) fs.rmSync(uiPdf, { force: true });

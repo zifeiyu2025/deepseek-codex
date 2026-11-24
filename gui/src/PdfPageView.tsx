@@ -16,6 +16,7 @@ type PdfPageAction = {
   id: string;
   text: string;
   rect?: PdfRect;
+  rects?: PdfRect[];
 };
 
 function dataUrlToBytes(dataUrl: string) {
@@ -44,6 +45,7 @@ export function PdfPageView({
   annotations,
   onPageCount,
   onRectSelected,
+  onTextSelected,
 }: {
   dataUrl: string;
   page: number;
@@ -53,9 +55,12 @@ export function PdfPageView({
   annotations: PdfPageAction[];
   onPageCount: (count: number) => void;
   onRectSelected: (rect: PdfRect) => void;
+  onTextSelected: (selection: { text: string; rects: PdfRect[] }) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const textLayerRef = useRef<HTMLDivElement | null>(null);
+  const textLayerInstanceRef = useRef<pdfjs.TextLayer | null>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
@@ -102,8 +107,11 @@ export function PdfPageView({
   useEffect(() => {
     if (!document || !canvasRef.current || containerWidth <= 0) return undefined;
     const targetPage = clamp(Math.trunc(page) || 1, 1, document.numPages);
+    const textLayerContainer = textLayerRef.current;
     let cancelled = false;
     renderTaskRef.current?.cancel();
+    textLayerInstanceRef.current?.cancel();
+    textLayerContainer?.replaceChildren();
     document
       .getPage(targetPage)
       .then((pdfPage) => {
@@ -127,6 +135,22 @@ export function PdfPageView({
           transform: pixelRatio !== 1 ? [pixelRatio, 0, 0, pixelRatio, 0, 0] : undefined,
         });
         renderTaskRef.current = renderTask;
+        if (textLayerContainer) {
+          textLayerContainer.style.setProperty(
+            '--total-scale-factor',
+            String(viewport.scale),
+          );
+          const textLayer = new pdfjs.TextLayer({
+            textContentSource: pdfPage.streamTextContent(),
+            container: textLayerContainer,
+            viewport,
+          });
+          textLayerInstanceRef.current = textLayer;
+          textLayer.render().catch((textError: any) => {
+            if (cancelled || textError?.name === 'AbortException') return;
+            setError(String(textError?.message || textError || 'PDF 文本层渲染失败'));
+          });
+        }
         return renderTask.promise;
       })
       .catch((renderError: any) => {
@@ -137,6 +161,9 @@ export function PdfPageView({
       cancelled = true;
       renderTaskRef.current?.cancel();
       renderTaskRef.current = null;
+      textLayerInstanceRef.current?.cancel();
+      textLayerInstanceRef.current = null;
+      textLayerContainer?.replaceChildren();
     };
   }, [document, page, zoom, rotation, containerWidth]);
 
@@ -169,6 +196,41 @@ export function PdfPageView({
     onRectSelected(rect);
   };
 
+  const captureTextSelection = (sheet: HTMLDivElement) => {
+    if (selecting) return;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    const textLayer = textLayerRef.current;
+    if (!textLayer || !textLayer.contains(range.commonAncestorContainer)) return;
+    const text = selection.toString().replace(/\s+/g, ' ').trim();
+    if (!text) return;
+    const bounds = sheet.getBoundingClientRect();
+    const rects = [...range.getClientRects()]
+      .filter(
+        (rect) =>
+          rect.width > 1 &&
+          rect.height > 1 &&
+          rect.bottom >= bounds.top &&
+          rect.top <= bounds.bottom,
+      )
+      .slice(0, 200)
+      .map((rect) => {
+        const x = clamp((rect.left - bounds.left) / Math.max(1, bounds.width), 0, 1);
+        const y = clamp((rect.top - bounds.top) / Math.max(1, bounds.height), 0, 1);
+        return {
+          x,
+          y,
+          width: clamp(rect.width / Math.max(1, bounds.width), 0, 1 - x),
+          height: clamp(rect.height / Math.max(1, bounds.height), 0, 1 - y),
+        };
+      })
+      .filter((rect) => rect.width > 0.002 && rect.height > 0.002);
+    if (!rects.length) return;
+    onTextSelected({ text: text.slice(0, 2000), rects });
+    selection.removeAllRanges();
+  };
+
   if (error) {
     return <div className="files-error">{error}</div>;
   }
@@ -181,23 +243,30 @@ export function PdfPageView({
           width: pageSize.width || undefined,
           height: pageSize.height || undefined,
         }}
+        onMouseUp={(event) => captureTextSelection(event.currentTarget)}
       >
         <canvas ref={canvasRef} className="pdf-page-canvas" />
-        {annotations.map((annotation) =>
-          annotation.rect ? (
+        <div ref={textLayerRef} className="pdf-text-layer" />
+        {annotations.map((annotation) => {
+          const rects = annotation.rects?.length
+            ? annotation.rects
+            : annotation.rect
+              ? [annotation.rect]
+              : [];
+          return rects.map((rect, index) => (
             <div
-              key={annotation.id}
+              key={`${annotation.id}-${index}`}
               className="pdf-highlight-box"
               title={annotation.text}
               style={{
-                left: `${annotation.rect.x * 100}%`,
-                top: `${annotation.rect.y * 100}%`,
-                width: `${annotation.rect.width * 100}%`,
-                height: `${annotation.rect.height * 100}%`,
+                left: `${rect.x * 100}%`,
+                top: `${rect.y * 100}%`,
+                width: `${rect.width * 100}%`,
+                height: `${rect.height * 100}%`,
               }}
             />
-          ) : null,
-        )}
+          ));
+        })}
         {draft ? (
           <div
             className="pdf-highlight-box draft"
