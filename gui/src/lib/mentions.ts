@@ -22,7 +22,7 @@ export function uniqueRelayTargets(targets: RelayTarget[]): RelayTarget[] {
 
 export function buildRelayTurnText(targets: RelayTarget[], message: string): string {
   if (targets.length === 1) {
-    return `请使用 collaboration.send_message 工具，把下面这条消息发送给子代理「${targets[0].name}」（threadId: ${targets[0].id}）：\n---\n${message}\n---\n发送后等待该子代理的回复，并把结果转述给我；不要自己直接完成这件事。`;
+    return `请调用 send_message 工具，参数 target 使用「${targets[0].name}」，message 使用下面内容：\n---\n${message}\n---\n发送后用 wait_agent 等待该子代理回复，并把结果转述给我；不要自己直接完成这件事。`;
   }
-  return `请使用 collaboration.send_message 工具，把下面同一条消息分别发送给这些子代理：\n${targets.map((target) => `- 「${target.name}」（threadId: ${target.id}）`).join('\n')}\n消息内容：\n---\n${message}\n---\n每个目标单独调用一次；发送完全部目标后等待回复并汇总转述给我；不要自己直接完成这件事。`;
+  return `请分别调用 send_message 工具 ${targets.length} 次，每个目标一次，不要合并：\n${targets.map((target, index) => `${index + 1}. target: 「${target.name}」`).join('\n')}\n每次的 message 都使用同一条内容：\n---\n${message}\n---\n发送完全部目标后，用 wait_agent 等待回复并汇总转述给我；不要自己直接完成这件事。`;
 }
