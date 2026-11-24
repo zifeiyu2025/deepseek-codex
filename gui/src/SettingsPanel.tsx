@@ -1096,7 +1096,7 @@ export function SettingsPanel({
             <div className="setting-row">
               <div className="setting-row-text">
                 <strong>电脑控制</strong>
-                <span>允许 AI 截屏并使用鼠标、键盘操作本机窗口</span>
+                <span>允许 AI 操作本机窗口；截图优先 Windows Graphics Capture，失败回退 PrintWindow</span>
               </div>
               <button
                 className={`switch ${localTools?.computer ? 'on' : ''}`}

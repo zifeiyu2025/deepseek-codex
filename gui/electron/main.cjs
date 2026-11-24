@@ -40,6 +40,8 @@ const ALLOWED_METHODS = new Set([
   'thread/searchOccurrences',
   'thread/turns/list',
   'thread/items/list',
+  'thread/subagents/list',
+  'thread/subagents/interrupt',
   'thread/prepareApprovedPlan',
   'thread/backgroundTerminals/list',
   'thread/backgroundTerminals/terminate',

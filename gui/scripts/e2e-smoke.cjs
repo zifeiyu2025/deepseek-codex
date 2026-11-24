@@ -325,6 +325,32 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
   check('collaborationMode/list 协议', protocol.modes);
   check('project/list 协议', protocol.projects);
   check('Windows 沙箱就绪查询', Boolean(protocol.sandbox), protocol.sandbox);
+  const subagentRpc = JSON.parse(
+    await evaluate(`(async()=>{
+      const config=await window.codex.getConfig();
+      const created=await window.codex.request('thread/start',{
+        cwd:config.defaultCwd,
+        model:config.defaultModel,
+        modelProvider:config.defaultProvider,
+        threadSource:'user',
+        approvalPolicy:'never',
+        sandbox:'danger-full-access',
+        ephemeral:true
+      });
+      const listed=await window.codex.request('thread/subagents/list',{
+        threadId:created.thread.id
+      });
+      return JSON.stringify({
+        agents:Array.isArray(listed.agents),
+        count:listed.agents?.length??-1
+      });
+    })()`),
+  );
+  check(
+    '子代理管理 RPC',
+    subagentRpc.agents && subagentRpc.count === 0,
+    JSON.stringify(subagentRpc),
+  );
 
   const terminalOpen = await evaluate("!!document.querySelector('.terminal-dock')");
   if (!terminalOpen) {

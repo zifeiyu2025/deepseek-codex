@@ -186,12 +186,17 @@ function subagentStatusLabel(status: unknown) {
     const labels: Record<string, string> = {
       running: '运行中',
       active: '运行中',
+      pendingInit: '初始化中',
       completed: '已完成',
       waiting: '等待指令',
       waitingOnApproval: '等待审批',
       waitingOnUserInput: '等待输入',
       interrupted: '已中断',
       failed: '失败',
+      errored: '失败',
+      shutdown: '已停止',
+      notFound: '未找到',
+      unloaded: '未加载',
     };
     return labels[status] || labels[status.toLowerCase()] || status;
   }
@@ -214,7 +219,7 @@ function subagentStatusLabel(status: unknown) {
 }
 
 function isRunningSubagent(status: unknown) {
-  if (typeof status === 'string') return /running|active/i.test(status);
+  if (typeof status === 'string') return /running|active|waiting/i.test(status);
   if (!status || typeof status !== 'object') return false;
   const value = status as Record<string, any>;
   return value.type === 'active' || 'active' in value;
@@ -265,6 +270,7 @@ export default function App() {
   const [subagentPanelOpen, setSubagentPanelOpen] = useState(false);
   const [subagentParentId, setSubagentParentId] = useState<string | null>(null);
   const [subagentMetadata, setSubagentMetadata] = useState<Record<string, ThreadSummary>>({});
+  const [subagentRpcItems, setSubagentRpcItems] = useState<Record<string, ThreadSummary>>({});
   const [browserPermissionRequest, setBrowserPermissionRequest] =
     useState<BrowserPermissionRequest | null>(null);
   const [threadQuery, setThreadQuery] = useState('');
@@ -3224,55 +3230,91 @@ export default function App() {
   const subagentIdsKey = subagentIds.join(',');
 
   useEffect(() => {
-    if (!subagentIds.length) {
-      setSubagentMetadata((previous) =>
-        Object.keys(previous).length ? {} : previous,
-      );
+    if (!threadId) {
+      setSubagentMetadata({});
+      setSubagentRpcItems({});
       return undefined;
     }
     let cancelled = false;
-    window.codex
-      .request('thread/list', {
-        includedThreadIds: subagentIds,
-        limit: subagentIds.length,
-        sortKey: 'updated_at',
-        sortDirection: 'desc',
-        useStateDbOnly: true,
-      })
-      .then((response) => {
+    (async () => {
+      let rpcResponse: any = null;
+      try {
+        rpcResponse = await window.codex.request('thread/subagents/list', {
+          threadId,
+        });
+      } catch {
+        /* older engines do not expose the management RPC */
+      }
+      if (cancelled) return;
+      const rpcItems: Record<string, ThreadSummary> = {};
+      for (const agent of rpcResponse?.agents || []) {
+        const id = agent?.threadId;
+        if (!id) continue;
+        rpcItems[id] = {
+          id,
+          preview: agent.agentPath || id,
+          parentThreadId: threadId,
+          agentNickname: agent.nickname || null,
+          agentRole: agent.role || null,
+          status: agent.status,
+        };
+      }
+      setSubagentRpcItems(rpcItems);
+      const ids = [...new Set([...subagentIds, ...Object.keys(rpcItems)])].slice(0, 100);
+      if (!ids.length) {
+        setSubagentMetadata({});
+        return;
+      }
+      try {
+        const response = await window.codex.request('thread/list', {
+          includedThreadIds: ids,
+          limit: ids.length,
+          sortKey: 'updated_at',
+          sortDirection: 'desc',
+          useStateDbOnly: true,
+        });
         if (cancelled) return;
         const next: Record<string, ThreadSummary> = {};
         for (const thread of response?.data || []) {
           if (thread?.id) next[thread.id] = thread;
         }
         setSubagentMetadata(next);
-      })
-      .catch(() => {
+      } catch {
         /* subagent metadata is best-effort */
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [subagentIdsKey]);
+  }, [threadId, subagentIdsKey]);
 
-  const subagents = useMemo<ThreadSummary[]>(
-    () =>
-      subagentItems.map((agent) => {
-        const metadata = subagentMetadata[agent.id] || {};
-        return {
-          ...metadata,
-          ...agent,
-          preview: agent.preview || metadata.preview,
-          model: agent.model || metadata.model,
-          agentNickname: agent.agentNickname || metadata.agentNickname,
-          agentRole: agent.agentRole || metadata.agentRole,
-          reasoningEffort: metadata.reasoningEffort ?? agent.reasoningEffort,
-          updatedAt: agent.updatedAt || metadata.updatedAt,
-          status: agent.status ?? metadata.status,
-        };
-      }),
-    [subagentItems, subagentMetadata],
-  );
+  const subagents = useMemo<ThreadSummary[]>(() => {
+    const itemMap = new Map(subagentItems.map((agent) => [agent.id, agent]));
+    const ids = new Set([
+      ...subagentItems.map((agent) => agent.id),
+      ...Object.keys(subagentRpcItems),
+      ...Object.keys(subagentMetadata),
+    ]);
+    return [...ids].map((id) => {
+      const item = itemMap.get(id);
+      const rpc = subagentRpcItems[id];
+      const metadata = subagentMetadata[id] || {};
+      return {
+        ...metadata,
+        ...rpc,
+        ...item,
+        id,
+        preview: item?.preview || rpc?.preview || metadata.preview || id,
+        model: item?.model || metadata.model,
+        agentNickname:
+          item?.agentNickname || rpc?.agentNickname || metadata.agentNickname,
+        agentRole: item?.agentRole || rpc?.agentRole || metadata.agentRole,
+        reasoningEffort: metadata.reasoningEffort ?? item?.reasoningEffort,
+        updatedAt: item?.updatedAt || metadata.updatedAt,
+        status: item?.status ?? rpc?.status ?? metadata.status,
+      };
+    });
+  }, [subagentItems, subagentRpcItems, subagentMetadata]);
 
   useEffect(() => {
     subagentsRef.current = subagents;
@@ -3287,6 +3329,18 @@ export default function App() {
     let stopped = 0;
     await Promise.allSettled(
       running.map(async (agent) => {
+        if (threadRef.current) {
+          try {
+            await window.codex.request('thread/subagents/interrupt', {
+              threadId: threadRef.current,
+              agentThreadId: agent.id,
+            });
+            stopped += 1;
+            return;
+          } catch {
+            /* fall back to active-turn interruption */
+          }
+        }
         let turns: any[] = [];
         try {
           const page = await window.codex.request('thread/turns/list', {

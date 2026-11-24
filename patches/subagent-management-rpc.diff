@@ -1,0 +1,214 @@
+diff --git a/codex-rs/app-server-protocol/src/protocol/common.rs b/codex-rs/app-server-protocol/src/protocol/common.rs
+index ade4a0e..4537a20 100644
+--- a/codex-rs/app-server-protocol/src/protocol/common.rs
++++ b/codex-rs/app-server-protocol/src/protocol/common.rs
+@@ -942,6 +942,16 @@ client_request_definitions! {
+         serialization: None,
+         response: v2::ThreadTurnsListResponse,
+     },
++    ThreadSubagentsList => "thread/subagents/list" {
++        params: v2::ThreadSubagentsListParams,
++        serialization: None,
++        response: v2::ThreadSubagentsListResponse,
++    },
++    ThreadSubagentsInterrupt => "thread/subagents/interrupt" {
++        params: v2::ThreadSubagentsInterruptParams,
++        serialization: thread_id(params.thread_id),
++        response: v2::ThreadSubagentsInterruptResponse,
++    },
+     ThreadItemsList => "thread/items/list" {
+         params: v2::ThreadItemsListParams,
+         inspect_params: true,
+diff --git a/codex-rs/app-server-protocol/src/protocol/v2/mod.rs b/codex-rs/app-server-protocol/src/protocol/v2/mod.rs
+index d9fd755..772fd91 100644
+--- a/codex-rs/app-server-protocol/src/protocol/v2/mod.rs
++++ b/codex-rs/app-server-protocol/src/protocol/v2/mod.rs
+@@ -1,6 +1,7 @@
+ mod shared;
+ 
+ mod account;
++mod subagent;
+ mod application;
+ mod apps;
+ mod attestation;
+@@ -46,6 +47,7 @@ mod windows_sandbox;
+ 
+ pub use account::*;
+ pub use application::*;
++pub use subagent::*;
+ pub use apps::*;
+ pub use attestation::*;
+ pub use bedrock::*;
+diff --git a/codex-rs/app-server/src/message_processor.rs b/codex-rs/app-server/src/message_processor.rs
+index e2f7362..e8397b6 100644
+--- a/codex-rs/app-server/src/message_processor.rs
++++ b/codex-rs/app-server/src/message_processor.rs
+@@ -1730,6 +1730,14 @@ impl MessageProcessor {
+             ClientRequest::ThreadTurnsList { params, .. } => {
+                 self.thread_processor.thread_turns_list(params).await
+             }
++            ClientRequest::ThreadSubagentsList { params, .. } => {
++                self.thread_processor.thread_subagents_list(params).await
++            }
++            ClientRequest::ThreadSubagentsInterrupt { params, .. } => {
++                self.thread_processor
++                    .thread_subagents_interrupt(params)
++                    .await
++            }
+             ClientRequest::ThreadItemsList { params, .. } => {
+                 self.thread_processor
+                     .thread_items_list(&request_id, params)
+diff --git a/codex-rs/app-server/src/request_processors/thread_processor.rs b/codex-rs/app-server/src/request_processors/thread_processor.rs
+index 2f12682..a4137d3 100644
+--- a/codex-rs/app-server/src/request_processors/thread_processor.rs
++++ b/codex-rs/app-server/src/request_processors/thread_processor.rs
+@@ -28,7 +28,14 @@ use crate::thread_sample::SampleTask;
+ use crate::thread_sample::SampleThread;
+ use crate::thread_sample::generate_sample;
+ use codex_app_server_protocol::SelectedCapabilityRoot;
++use codex_app_server_protocol::SubagentInfo;
++use codex_app_server_protocol::SubagentStatus;
+ use codex_app_server_protocol::ThreadHistoryMode as ApiThreadHistoryMode;
++use codex_app_server_protocol::ThreadSubagentsInterruptParams;
++use codex_app_server_protocol::ThreadSubagentsInterruptResponse;
++use codex_app_server_protocol::ThreadSubagentsListParams;
++use codex_app_server_protocol::ThreadSubagentsListResponse;
++use codex_protocol::protocol::AgentStatus;
+ use codex_app_server_protocol::ThreadItem;
+ use codex_app_server_protocol::ThreadItemOutputDeferral;
+ use codex_app_server_protocol::ThreadItemPayload;
+@@ -78,6 +85,33 @@ pub(crate) enum ThreadSearchDelivery {
+     Streaming,
+ }
+ 
++fn subagent_info_from_parts(
++    thread_id: ThreadId,
++    metadata: codex_core::AgentMetadata,
++    status: Option<AgentStatus>,
++) -> SubagentInfo {
++    let (status, status_detail) = match status {
++        Some(AgentStatus::PendingInit) => (SubagentStatus::PendingInit, None),
++        Some(AgentStatus::Running) => (SubagentStatus::Running, None),
++        Some(AgentStatus::Interrupted) => (SubagentStatus::Interrupted, None),
++        Some(AgentStatus::Completed(message)) => (SubagentStatus::Completed, message),
++        Some(AgentStatus::Errored(message)) => (SubagentStatus::Errored, Some(message)),
++        Some(AgentStatus::Shutdown) => (SubagentStatus::Shutdown, None),
++        Some(AgentStatus::NotFound) => (SubagentStatus::NotFound, None),
++        None => (SubagentStatus::Unloaded, None),
++    };
++    SubagentInfo {
++        thread_id: thread_id.to_string(),
++        agent_path: metadata
++            .agent_path
++            .map(|path| path.as_str().to_string()),
++        nickname: metadata.agent_nickname,
++        role: metadata.agent_role,
++        status,
++        status_detail,
++    }
++}
++
+ async fn stage_pending_thread_metadata(
+     thread_manager: &ThreadManager,
+     thread_store: &dyn ThreadStore,
+@@ -1057,6 +1091,52 @@ impl ThreadRequestProcessor {
+             .map(|response| Some(response.into()))
+     }
+ 
++    pub(crate) async fn thread_subagents_list(
++        &self,
++        params: ThreadSubagentsListParams,
++    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
++        let (_, thread) = self.load_thread(&params.thread_id).await?;
++        let agents = thread
++            .list_subagents(params.path_prefix.as_deref())
++            .await
++            .map_err(|err| internal_error(format!("failed to list subagents: {err}")))?;
++        let response = ThreadSubagentsListResponse {
++            agents: agents
++                .into_iter()
++                .map(|agent| {
++                    subagent_info_from_parts(
++                        agent.thread_id,
++                        agent.metadata,
++                        Some(agent.status),
++                    )
++                })
++                .collect(),
++        };
++        Ok(Some(response.into()))
++    }
++
++    pub(crate) async fn thread_subagents_interrupt(
++        &self,
++        params: ThreadSubagentsInterruptParams,
++    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
++        let (_, thread) = self.load_thread(&params.thread_id).await?;
++        let agent_thread_id = ThreadId::from_string(&params.agent_thread_id)
++            .map_err(|err| invalid_request(format!("invalid agent thread id: {err}")))?;
++        let info = thread
++            .interrupt_subagent(agent_thread_id)
++            .await
++            .map_err(|err| internal_error(format!("failed to interrupt subagent: {err}")))?;
++        let agent = match info {
++            codex_core::AgentInfo::Loaded { agent, .. } => {
++                subagent_info_from_parts(agent.thread_id, agent.metadata, Some(agent.status))
++            }
++            codex_core::AgentInfo::Unloaded(metadata) => {
++                subagent_info_from_parts(agent_thread_id, metadata, None)
++            }
++        };
++        Ok(Some(ThreadSubagentsInterruptResponse { agent }.into()))
++    }
++
+     pub(crate) async fn thread_items_list(
+         &self,
+         request_id: &ConnectionRequestId,
+diff --git a/codex-rs/core/src/codex_thread.rs b/codex-rs/core/src/codex_thread.rs
+index 109b678..89b06be 100644
+--- a/codex-rs/core/src/codex_thread.rs
++++ b/codex-rs/core/src/codex_thread.rs
+@@ -1,6 +1,9 @@
+ use crate::WithTurnExtensionData;
+ use crate::agent::AgentStatus;
+ use crate::agent::api::AgentControl;
++use crate::agent::api::AgentInfo;
++use crate::agent::api::AgentTarget;
++use crate::agent::types::LiveAgent;
+ use crate::config::ConstraintResult;
+ use crate::context::ContextualUserFragment;
+ use crate::context::GuardianReviewEvidence;
+@@ -352,6 +355,33 @@ impl CodexThread {
+             .await
+     }
+ 
++    /// Lists live agents in this thread's agent tree, excluding the caller itself.
++    pub async fn list_subagents(&self, path_prefix: Option<&str>) -> CodexResult<Vec<LiveAgent>> {
++        let mut agents = self
++            .session
++            .services
++            .agent_control
++            .list(
++                self.session.thread_id,
++                self.session_source.parent_thread_id(),
++                &self.session_source,
++                path_prefix,
++            )
++            .await?;
++        agents.retain(|agent| agent.thread_id != self.session.thread_id);
++        Ok(agents)
++    }
++
++    /// Interrupts a child agent in this thread's agent tree.
++    pub async fn interrupt_subagent(&self, target: ThreadId) -> CodexResult<AgentInfo> {
++        let version = self.multi_agent_version().unwrap_or(MultiAgentVersion::V1);
++        self.session
++            .services
++            .agent_control
++            .interrupt(self.session.thread_id, AgentTarget::Id(target), version)
++            .await
++    }
++
+     /// Reads this thread's configured clock.
+     pub fn current_time(&self) -> CodexResult<DateTime<Utc>> {
+         self.session
