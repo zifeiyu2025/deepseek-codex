@@ -1717,6 +1717,11 @@ const browserTools = [
         text: { type: 'string' },
         urlContains: { type: 'string' },
         ref: { type: 'string', description: 'Element ref from browser_snapshot or browser_find' },
+        state: {
+          type: 'string',
+          enum: ['visible', 'hidden', 'attached', 'detached'],
+          description: 'Element state to wait for; defaults to visible',
+        },
         timeout_ms: { type: 'number', description: 'Timeout in milliseconds, defaults to 5000' },
       },
     },
@@ -1845,6 +1850,90 @@ const browserTools = [
         text: { type: 'string' },
         x: { type: 'number' },
         y: { type: 'number' },
+        click_count: { type: 'number', description: '1 or 2; 2 performs a double-click' },
+      },
+    },
+  },
+  {
+    name: 'browser_check',
+    description: 'Check or uncheck a checkbox/radio by ref or CSS selector.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        selector: { type: 'string' },
+        checked: { type: 'boolean', description: 'Defaults to true' },
+      },
+    },
+  },
+  {
+    name: 'browser_press',
+    description:
+      'Focus a target and press a key (enter, tab, escape, backspace, delete, space, home, end, pageup, pagedown, arrows).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        selector: { type: 'string' },
+        key: { type: 'string' },
+      },
+      required: ['key'],
+    },
+  },
+  {
+    name: 'browser_element',
+    description:
+      'Read a page element property: text_content, inner_text, inner_html, value, attribute, count, is_visible, is_enabled, or is_checked.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        selector: { type: 'string' },
+        role: { type: 'string' },
+        name: { type: 'string' },
+        text: { type: 'string' },
+        label: { type: 'string' },
+        placeholder: { type: 'string' },
+        testId: { type: 'string' },
+        property: {
+          type: 'string',
+          enum: [
+            'text_content',
+            'inner_text',
+            'inner_html',
+            'value',
+            'attribute',
+            'count',
+            'is_visible',
+            'is_enabled',
+            'is_checked',
+          ],
+        },
+        attribute: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'browser_clipboard',
+    description: 'Read or write the page clipboard using the Clipboard API.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['read', 'write'] },
+        text: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'browser_download',
+    description:
+      'Click a target element that starts a download and wait for the completed browser download.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        selector: { type: 'string' },
+        timeout_ms: { type: 'number', description: 'Defaults to 10000' },
       },
     },
   },

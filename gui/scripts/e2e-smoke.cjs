@@ -350,6 +350,21 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
             const shapeStyle=shape?.color==='#00ff00'&&shape?.width===5;
             const shapeNodes=document.querySelectorAll('.pdf-shape-layer rect').length;
             const inkNodes=document.querySelectorAll('.pdf-shape-layer polyline').length;
+            const shapeRow=[...document.querySelectorAll('.pdf-annotation-row')]
+              .find(row=>row.querySelector('.pdf-annotation-text')?.textContent.includes('矩形批注'));
+            const rowColor=shapeRow?.querySelector('.pdf-annotation-style input[type=color]');
+            const rowWidth=shapeRow?.querySelector('.pdf-annotation-style select');
+            if(rowColor&&rowWidth){
+              colorSetter.call(rowColor,'#123456');
+              rowColor.dispatchEvent(new Event('input',{bubbles:true}));
+              rowColor.dispatchEvent(new Event('change',{bubbles:true}));
+              widthSetter.call(rowWidth,'3');
+              rowWidth.dispatchEvent(new Event('change',{bubbles:true}));
+            }
+            await delay(220);
+            list=Object.values(JSON.parse(localStorage.getItem('deepseek-codex.pdfAnnotations')||'{}'))[0]||[];
+            const editedShape=list.find(annotation=>annotation.id===shape?.id);
+            const styleEdited=editedShape?.color==='#123456'&&editedShape?.width===3;
             setTool('erase');
             await delay(120);
             surface=document.querySelector('.pdf-draw-surface.active');
@@ -361,7 +376,7 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
             list=Object.values(JSON.parse(localStorage.getItem('deepseek-codex.pdfAnnotations')||'{}'))[0]||[];
             const erased=!list.some(annotation=>annotation.kind==='shape');
             setTool('none');
-            return JSON.stringify({ok:true,shape:Boolean(shape),shapeStyle,ink,shapeNodes,inkNodes,erased});
+            return JSON.stringify({ok:true,shape:Boolean(shape),shapeStyle,styleEdited,ink,shapeNodes,inkNodes,erased});
           })()`),
         );
         check(
@@ -369,11 +384,39 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
           graphicalPdf.ok &&
             graphicalPdf.shape &&
             graphicalPdf.shapeStyle &&
+            graphicalPdf.styleEdited &&
             graphicalPdf.ink &&
             graphicalPdf.shapeNodes > 0 &&
             graphicalPdf.inkNodes > 0 &&
             graphicalPdf.erased,
           JSON.stringify(graphicalPdf),
+        );
+        const crossPage = JSON.parse(
+          await evaluate(`(async()=>{
+            const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            const input=document.querySelector('.pdf-annotation-form input.setting-input');
+            const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+            setter.call(input,'Smoke PDF');
+            input.dispatchEvent(new Event('input',{bubbles:true}));
+            await delay(120);
+            document.querySelector('.pdf-anchor-btn')?.click();
+            let status='';
+            for(let attempt=0;attempt<60;attempt+=1){
+              await delay(100);
+              status=document.querySelector('.pdf-anchor-status')?.textContent||'';
+              if(status.includes('锚定')) break;
+            }
+            const list=Object.values(JSON.parse(localStorage.getItem('deepseek-codex.pdfAnnotations')||'{}'))[0]||[];
+            const pages=[...new Set(list.filter(annotation=>annotation.anchorText==='Smoke PDF').map(annotation=>annotation.page))].sort();
+            return JSON.stringify({status,pages});
+          })()`),
+        );
+        check(
+          'PDF 跨页文本锚定',
+          crossPage.status.includes('已在') &&
+            crossPage.pages.includes(1) &&
+            crossPage.pages.includes(2),
+          JSON.stringify(crossPage),
         );
       }
     } finally {
@@ -680,7 +723,7 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
           hover:names.includes('browser_hover'),
           select:names.includes('browser_select'),
           tabs:['browser_tab_list','browser_tab_open','browser_tab_select','browser_tab_close'].every(name=>names.includes(name)),
-          inspect:['browser_dialog','browser_network_log','browser_wait_for_response','browser_wait_for_download','browser_element_screenshot'].every(name=>names.includes(name)),
+          inspect:['browser_dialog','browser_network_log','browser_wait_for_response','browser_wait_for_download','browser_element_screenshot','browser_check','browser_press','browser_element','browser_clipboard','browser_download'].every(name=>names.includes(name)),
           evalTool:names.includes('browser_eval')
         });
       } finally {
@@ -823,6 +866,7 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
         '<button aria-label="Smoke Button">Smoke Button</button>' +
         '<label>Smoke Input <input id="smoke-input" placeholder="smoke placeholder"></label>' +
         '<select aria-label="Smoke Select"><option value="a">Alpha</option><option value="b">Beta</option></select>' +
+        '<label><input id="smoke-check" type="checkbox"> Smoke Check</label>' +
         '<button id="dialog-button" onclick="alert(\'smoke-dialog\')">Dialog</button>',
     );
   });
@@ -961,6 +1005,12 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
             arguments:{ref}
           });
           const elementShot=(elementShotResponse.content||[]).some(entry=>entry.type==='image'&&entry.data?.length>1000);
+          const checked=await call('browser_check',{selector:'#smoke-check',checked:true});
+          const checkState=await call('browser_element',{selector:'#smoke-check',property:'is_checked'});
+          const buttonText=await call('browser_element',{selector:'#dialog-button',property:'text_content'});
+          const buttonLabel=await call('browser_element',{selector:'button[aria-label="Smoke Button"]',property:'attribute',attribute:'aria-label'});
+          await call('browser_press',{selector:'#smoke-input',key:'Enter'});
+          const stateWait=await call('browser_wait_for',{selector:'#smoke-check',state:'visible',timeout_ms:2000});
           const selected=await call('browser_select',{selector:'select',label:'Beta'});
           const tabsBefore=await call('browser_tab_list',{});
           const opened=await call('browser_tab_open',{url:${JSON.stringify(permissionOrigin)}+'?tab=2'});
@@ -996,6 +1046,10 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
             ref:Boolean(ref),
             hovered:String(hovered||'').includes('已悬停'),
             elementShot,
+            checked:checked?.checked===true&&checkState?.value===true,
+            buttonText:String(buttonText?.value||'').includes('Dialog'),
+            buttonLabel:buttonLabel?.value==='Smoke Button',
+            stateWait:stateWait?.matched===true,
             selected:selected?.value==='b'&&selected?.label==='Beta',
             tabsBefore:Array.isArray(tabsBefore?.tabs)&&tabsBefore.tabs.length>=1,
             tabOpened:tabsOpened?.tabs?.some(tab=>tab.id===opened?.tab?.id),
@@ -1018,6 +1072,10 @@ async function evaluateCdpTarget(target, expression, userGesture = false) {
         browserApi.ref &&
         browserApi.hovered &&
         browserApi.elementShot &&
+        browserApi.checked &&
+        browserApi.buttonText &&
+        browserApi.buttonLabel &&
+        browserApi.stateWait &&
         browserApi.selected &&
         browserApi.tabsBefore &&
         browserApi.tabOpened &&

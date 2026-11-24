@@ -33,6 +33,7 @@ import { readStorage, writeStorage } from './lib/storage';
 import { Modal } from './components/Modal';
 import {
   PdfPageView,
+  searchPdfText,
   type PdfDrawTool,
   type PdfPoint,
   type PdfRect,
@@ -323,6 +324,8 @@ export function FilesPanel({
   } | null>(null);
   const [pdfAnnotations, setPdfAnnotations] = useState<PdfAnnotation[]>([]);
   const [pdfAnnotationText, setPdfAnnotationText] = useState('');
+  const [pdfAnchorBusy, setPdfAnchorBusy] = useState(false);
+  const [pdfAnchorStatus, setPdfAnchorStatus] = useState('');
   const [pdfAnnotationsOpen, setPdfAnnotationsOpen] = useState(true);
   const [fileQuery, setFileQuery] = useState('');
   const [fileResults, setFileResults] = useState<
@@ -457,6 +460,8 @@ export function FilesPanel({
     setPdfPendingText(null);
     setPdfAnnotations(readPdfAnnotations(preview.absolutePath));
     setPdfAnnotationText('');
+    setPdfAnchorBusy(false);
+    setPdfAnchorStatus('');
     setPdfAnnotationsOpen(true);
   }, [preview?.absolutePath, preview?.kind]);
 
@@ -548,6 +553,53 @@ export function FilesPanel({
     persistPdfAnnotations(next);
   };
 
+  const anchorPdfTextAcrossPages = async () => {
+    const query = pdfAnnotationText.trim();
+    if (query.length < 2 || !preview?.dataUrl || pdfAnchorBusy) return;
+    setPdfAnchorBusy(true);
+    setPdfAnchorStatus('');
+    try {
+      const matches = await searchPdfText(preview.dataUrl, query);
+      if (!matches.length) {
+        setPdfAnchorStatus('未在所有页面找到该文本');
+        return;
+      }
+      const existing = new Set(
+        pdfAnnotations
+          .filter((annotation) => annotation.anchorText === query)
+          .map((annotation) => annotation.page),
+      );
+      const additions = matches
+        .filter((match) => !existing.has(match.page))
+        .map((match, index) => ({
+          id: `pdf-anchor-${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+          page: match.page,
+          text: query.slice(0, 2000),
+          at: Date.now(),
+          kind: 'text' as const,
+          rects: match.rects,
+          anchorText: query.slice(0, 2000),
+          rotation: 0,
+        }));
+      if (!additions.length) {
+        setPdfAnchorStatus(`该文本已在 ${matches.length} 页锚定`);
+        return;
+      }
+      persistPdfAnnotations([...pdfAnnotations, ...additions].slice(-100));
+      setPdfRotation(0);
+      const firstPage = additions[0].page;
+      setPdfPage(firstPage);
+      setPdfPageInput(String(firstPage));
+      setPdfPendingRect(null);
+      setPdfPendingText(null);
+      setPdfAnchorStatus(`已在 ${additions.length} 页锚定该文本`);
+    } catch (error: any) {
+      setPdfAnchorStatus(friendlyClientError(error));
+    } finally {
+      setPdfAnchorBusy(false);
+    }
+  };
+
   const addPdfInk = (points: PdfPoint[]) => {
     if (points.length < 2) return;
     const next = [
@@ -569,6 +621,17 @@ export function FilesPanel({
 
   const removePdfAnnotation = (id: string) => {
     persistPdfAnnotations(pdfAnnotations.filter((entry) => entry.id !== id));
+  };
+
+  const updatePdfAnnotationStyle = (
+    id: string,
+    patch: Partial<Pick<PdfAnnotation, 'color' | 'width'>>,
+  ) => {
+    persistPdfAnnotations(
+      pdfAnnotations.map((annotation) =>
+        annotation.id === id ? { ...annotation, ...patch } : annotation,
+      ),
+    );
   };
 
   const isPathInsideRoot = (filePath: string) => {
@@ -898,7 +961,19 @@ export function FilesPanel({
                       <Plus size={13} />
                       添加
                     </button>
+                    <button
+                      className="settings-button pdf-anchor-btn"
+                      disabled={pdfAnchorBusy || pdfAnnotationText.trim().length < 2}
+                      onClick={() => void anchorPdfTextAcrossPages()}
+                      title="在所有页面搜索输入文字并创建跨页锚定"
+                    >
+                      {pdfAnchorBusy ? <Loader2 className="spin" size={13} /> : null}
+                      跨页锚定
+                    </button>
                   </div>
+                  {pdfAnchorStatus ? (
+                    <div className="pdf-anchor-status">{pdfAnchorStatus}</div>
+                  ) : null}
                   {pdfAnnotations.length ? (
                     <div className="pdf-annotation-list">
                       {pdfAnnotations.map((annotation) => (
@@ -929,6 +1004,42 @@ export function FilesPanel({
                             </span>
                             <p>{annotation.text}</p>
                           </button>
+                          {annotation.kind === 'shape' || annotation.kind === 'ink' ? (
+                            <span className="pdf-annotation-style">
+                              <input
+                                type="color"
+                                aria-label="批注颜色"
+                                value={
+                                  annotation.color ||
+                                  (annotation.kind === 'ink' ? '#5ea7ff' : '#ff7a59')
+                                }
+                                onChange={(event) =>
+                                  updatePdfAnnotationStyle(annotation.id, {
+                                    color: event.target.value,
+                                  })
+                                }
+                              />
+                              <select
+                                aria-label="批注线宽"
+                                value={String(
+                                  annotation.width ||
+                                    (annotation.kind === 'ink' ? 2.5 : 2),
+                                )}
+                                onChange={(event) =>
+                                  updatePdfAnnotationStyle(annotation.id, {
+                                    width: Number(event.target.value) || 2,
+                                  })
+                                }
+                              >
+                                <option value="1">1px</option>
+                                <option value="2">2px</option>
+                                <option value="2.5">2.5px</option>
+                                <option value="3">3px</option>
+                                <option value="5">5px</option>
+                                <option value="8">8px</option>
+                              </select>
+                            </span>
+                          ) : null}
                           <button
                             className="icon-button"
                             aria-label="删除批注"

@@ -19,6 +19,115 @@ export type PdfPoint = {
 
 export type PdfDrawTool = 'none' | 'rect' | 'arrow' | 'ink' | 'erase';
 
+export type PdfTextAnchorMatch = {
+  page: number;
+  rects: PdfRect[];
+};
+
+export async function searchPdfText(
+  dataUrl: string,
+  query: string,
+  maxMatches = 100,
+): Promise<PdfTextAnchorMatch[]> {
+  const needle = query.trim();
+  if (needle.length < 2) return [];
+  const loadingTask = pdfjs.getDocument({ data: dataUrlToBytes(dataUrl) });
+  const document = await loadingTask.promise;
+  const matches: PdfTextAnchorMatch[] = [];
+  try {
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+      if (matches.length >= maxMatches) break;
+      const page = await document.getPage(pageNumber);
+      const viewport = page.getViewport({ scale: 1, rotation: 0 });
+      const wrapper = window.document.createElement('div');
+      wrapper.style.cssText = `position:fixed;left:-100000px;top:0;width:${viewport.width}px;height:${viewport.height}px;opacity:0;pointer-events:none;`;
+      const container = window.document.createElement('div');
+      container.className = 'pdf-text-layer';
+      container.style.width = `${viewport.width}px`;
+      container.style.height = `${viewport.height}px`;
+      container.style.setProperty('--total-scale-factor', '1');
+      container.style.setProperty('--scale-round-x', '1px');
+      container.style.setProperty('--scale-round-y', '1px');
+      wrapper.appendChild(container);
+      window.document.body.appendChild(wrapper);
+      try {
+        const textLayer = new pdfjs.TextLayer({
+          textContentSource: page.streamTextContent(),
+          container,
+          viewport,
+        });
+        await textLayer.render();
+        const walker = window.document.createTreeWalker(
+          container,
+          NodeFilter.SHOW_TEXT,
+        );
+        const nodes: { node: Text; start: number }[] = [];
+        let text = '';
+        while (walker.nextNode()) {
+          const node = walker.currentNode as Text;
+          nodes.push({ node, start: text.length });
+          text += node.nodeValue || '';
+        }
+        const nodeAt = (offset: number) => {
+          for (let index = nodes.length - 1; index >= 0; index -= 1) {
+            const entry = nodes[index];
+            const length = entry.node.nodeValue?.length || 0;
+            if (offset >= entry.start && offset <= entry.start + length) {
+              return { node: entry.node, offset: offset - entry.start };
+            }
+          }
+          return null;
+        };
+        const lowerText = text.toLowerCase();
+        const lowerNeedle = needle.toLowerCase();
+        const bounds = wrapper.getBoundingClientRect();
+        let offset = 0;
+        let pageMatches = 0;
+        while (pageMatches < 20 && matches.length < maxMatches) {
+          const found = lowerText.indexOf(lowerNeedle, offset);
+          if (found < 0) break;
+          const start = nodeAt(found);
+          const end = nodeAt(found + needle.length);
+          if (start && end) {
+            const range = window.document.createRange();
+            range.setStart(start.node, start.offset);
+            range.setEnd(end.node, end.offset);
+            const rects = [...range.getClientRects()]
+              .filter(
+                (rect) =>
+                  rect.width > 1 &&
+                  rect.height > 1 &&
+                  rect.bottom >= bounds.top &&
+                  rect.top <= bounds.bottom,
+              )
+              .slice(0, 100)
+              .map((rect) => {
+                const x = Math.max(0, Math.min(1, (rect.left - bounds.left) / bounds.width));
+                const y = Math.max(0, Math.min(1, (rect.top - bounds.top) / bounds.height));
+                return {
+                  x,
+                  y,
+                  width: Math.max(0, Math.min(1 - x, rect.width / bounds.width)),
+                  height: Math.max(0, Math.min(1 - y, rect.height / bounds.height)),
+                };
+              });
+            if (rects.length) {
+              matches.push({ page: pageNumber, rects });
+              pageMatches += 1;
+            }
+          }
+          offset = found + Math.max(1, needle.length);
+        }
+      } finally {
+        wrapper.remove();
+      }
+    }
+  } finally {
+    void loadingTask.destroy();
+  }
+  return matches;
+}
+
 type PdfPageAction = {
   id: string;
   text: string;

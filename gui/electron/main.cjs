@@ -1318,6 +1318,12 @@ const GUEST_KEYS = {
   tab: { key: 'Tab', code: 'Tab', vk: 9 },
   escape: { key: 'Escape', code: 'Escape', vk: 27 },
   backspace: { key: 'Backspace', code: 'Backspace', vk: 8 },
+  delete: { key: 'Delete', code: 'Delete', vk: 46 },
+  space: { key: ' ', code: 'Space', vk: 32, text: ' ' },
+  home: { key: 'Home', code: 'Home', vk: 36 },
+  end: { key: 'End', code: 'End', vk: 35 },
+  pageup: { key: 'PageUp', code: 'PageUp', vk: 33 },
+  pagedown: { key: 'PageDown', code: 'PageDown', vk: 34 },
   arrowup: { key: 'ArrowUp', code: 'ArrowUp', vk: 38 },
   arrowdown: { key: 'ArrowDown', code: 'ArrowDown', vk: 40 },
   arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft', vk: 37 },
@@ -1720,6 +1726,31 @@ function browserTargetScript(spec) {
   })()`;
 }
 
+async function resolveBrowserTarget(guest, args) {
+  let ref = typeof args?.ref === 'string' ? args.ref : '';
+  let selector = typeof args?.selector === 'string' ? args.selector : '';
+  if (!ref && !selector) {
+    const found = await guest.executeJavaScript(
+      browserFindScript(
+        {
+          role: typeof args?.role === 'string' ? args.role : '',
+          name: typeof args?.name === 'string' ? args.name : '',
+          text: typeof args?.text === 'string' ? args.text : '',
+          label: typeof args?.label === 'string' ? args.label : '',
+          placeholder: typeof args?.placeholder === 'string' ? args.placeholder : '',
+          testId: typeof args?.testId === 'string' ? args.testId : '',
+        },
+        1,
+      ),
+      true,
+    );
+    const element = found?.elements?.[0];
+    if (!element?.ref) throw new Error('未找到目标元素');
+    ref = element.ref;
+  }
+  return { ref, selector };
+}
+
 async function handleBrowserTabTool(tool, args) {
   if (tool === 'browser_tab_list') {
     const result = await requestBrowserTabs('list');
@@ -1930,6 +1961,9 @@ async function handleBrowserTool(tool, args) {
     const text = typeof args?.text === 'string' ? args.text : '';
     const urlContains = typeof args?.urlContains === 'string' ? args.urlContains : '';
     const ref = typeof args?.ref === 'string' ? args.ref : '';
+    const state = ['visible', 'hidden', 'attached', 'detached'].includes(args?.state)
+      ? args.state
+      : 'visible';
     if (!selector && !text && !urlContains && !ref) {
       throw new Error('缺少等待条件');
     }
@@ -1951,22 +1985,42 @@ async function handleBrowserTool(tool, args) {
             : selector
               ? document.querySelector(selector)
               : null;
+          const selectorElement = selector ? document.querySelector(selector) : null;
           return {
             url: location.href,
             title: document.title,
+            elementPresent: Boolean(element),
             elementVisible: element ? visible(element) : false,
-            hasSelector: selector ? Boolean(document.querySelector(selector)) : false,
+            hasSelector: selector ? Boolean(selectorElement) : false,
+            selectorVisible: selectorElement ? visible(selectorElement) : false,
             hasText: ${JSON.stringify(text)} ? document.body.innerText.includes(${JSON.stringify(text)}) : false,
           };
         })()`,
         true,
       );
       last = snapshot;
-      const selectorOk = !selector || snapshot.hasSelector;
-      const refOk = !ref || snapshot.elementVisible;
+      const targetExists = ref
+        ? snapshot.elementPresent
+        : selector
+          ? snapshot.hasSelector
+          : true;
+      const targetVisible = ref
+        ? snapshot.elementVisible
+        : selector
+          ? snapshot.selectorVisible
+          : true;
+      const targetOk =
+        (!ref && !selector) ||
+        (state === 'attached'
+          ? targetExists
+          : state === 'detached'
+            ? !targetExists
+            : state === 'hidden'
+              ? !targetVisible
+              : targetVisible);
       const textOk = !text || snapshot.hasText;
       const urlOk = !urlContains || snapshot.url.includes(urlContains);
-      if (selectorOk && refOk && textOk && urlOk) {
+      if (targetOk && textOk && urlOk) {
         return {
           type: 'text',
           text: JSON.stringify({ matched: true, ...snapshot }, null, 2),
@@ -2031,6 +2085,144 @@ async function handleBrowserTool(tool, args) {
       true,
     );
     return { type: 'text', text: JSON.stringify(result, null, 2) };
+  }
+  if (tool === 'browser_check') {
+    const { ref, selector } = await resolveBrowserTarget(guest, args);
+    const checked = args?.checked !== false;
+    const result = await guest.executeJavaScript(
+      `(() => {
+        let el = null;
+        if (${JSON.stringify(ref)}) el = document.querySelector('[data-shanui-ref="' + CSS.escape(${JSON.stringify(ref)}) + '"]');
+        if (!el && ${JSON.stringify(selector)}) el = document.querySelector(${JSON.stringify(selector)});
+        if (!(el instanceof HTMLInputElement) || !['checkbox','radio'].includes(el.type)) {
+          throw new Error('目标元素不是 checkbox/radio');
+        }
+        if (!${checked} && el.type === 'radio') throw new Error('radio 不能取消选中');
+        if (el.checked !== ${checked}) {
+          el.click();
+        }
+        return { checked: el.checked, type: el.type };
+      })()`,
+      true,
+    );
+    return { type: 'text', text: JSON.stringify(result, null, 2) };
+  }
+  if (tool === 'browser_press') {
+    const { ref, selector } = await resolveBrowserTarget(guest, args);
+    await guest.executeJavaScript(
+      `(() => {
+        let el = null;
+        if (${JSON.stringify(ref)}) el = document.querySelector('[data-shanui-ref="' + CSS.escape(${JSON.stringify(ref)}) + '"]');
+        if (!el && ${JSON.stringify(selector)}) el = document.querySelector(${JSON.stringify(selector)});
+        if (!(el instanceof HTMLElement)) throw new Error('未找到目标元素');
+        el.focus();
+        return true;
+      })()`,
+      true,
+    );
+    const key = String(args?.key || '').toLowerCase();
+    await guestPressKey(guest, key === ' ' ? 'space' : key);
+    return { type: 'text', text: `已按下 ${key}` };
+  }
+  if (tool === 'browser_element') {
+    const property = String(args?.property || 'text_content');
+    if (property === 'count') {
+      const found = await guest.executeJavaScript(
+        browserFindScript(
+          {
+            selector: typeof args?.selector === 'string' ? args.selector : '',
+            role: typeof args?.role === 'string' ? args.role : '',
+            name: typeof args?.name === 'string' ? args.name : '',
+            text: typeof args?.text === 'string' ? args.text : '',
+            label: typeof args?.label === 'string' ? args.label : '',
+            placeholder: typeof args?.placeholder === 'string' ? args.placeholder : '',
+            testId: typeof args?.testId === 'string' ? args.testId : '',
+          },
+          100,
+        ),
+        true,
+      );
+      return {
+        type: 'text',
+        text: JSON.stringify(
+          {
+            count: found?.elements?.length || 0,
+            countCapped: (found?.elements?.length || 0) >= 100,
+          },
+          null,
+          2,
+        ),
+      };
+    }
+    const { ref, selector } = await resolveBrowserTarget(guest, args);
+    const result = await guest.executeJavaScript(
+      `(() => {
+        let el = null;
+        if (${JSON.stringify(ref)}) el = document.querySelector('[data-shanui-ref="' + CSS.escape(${JSON.stringify(ref)}) + '"]');
+        if (!el && ${JSON.stringify(selector)}) el = document.querySelector(${JSON.stringify(selector)});
+        if (!(el instanceof HTMLElement)) throw new Error('未找到目标元素');
+        const property = ${JSON.stringify(property)};
+        let value = null;
+        if (property === 'text_content') value = el.textContent;
+        else if (property === 'inner_text') value = el.innerText;
+        else if (property === 'inner_html') value = el.innerHTML;
+        else if (property === 'value') value = el.value ?? '';
+        else if (property === 'attribute') value = el.getAttribute(${JSON.stringify(String(args?.attribute || ''))});
+        else if (property === 'is_visible') {
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          value = rect.width > 1 && rect.height > 1 && style.display !== 'none' && style.visibility !== 'hidden';
+        } else if (property === 'is_enabled') value = !el.disabled;
+        else if (property === 'is_checked') value = Boolean(el.checked);
+        else throw new Error('不支持的属性：' + property);
+        if (typeof value === 'string' && value.length > 20000) value = value.slice(0, 20000) + '...';
+        return { property, value };
+      })()`,
+      true,
+    );
+    return { type: 'text', text: JSON.stringify(result, null, 2) };
+  }
+  if (tool === 'browser_clipboard') {
+    const action = args?.action === 'write' ? 'write' : 'read';
+    if (action === 'read') {
+      const value = await guest.executeJavaScript('navigator.clipboard.readText()', true);
+      return { type: 'text', text: JSON.stringify({ action, value }, null, 2) };
+    }
+    const text = String(args?.text || '').slice(0, 200000);
+    await guest.executeJavaScript(
+      `navigator.clipboard.writeText(${JSON.stringify(text)}).then(()=>true)`,
+      true,
+    );
+    return {
+      type: 'text',
+      text: JSON.stringify({ action, length: text.length }, null, 2),
+    };
+  }
+  if (tool === 'browser_download') {
+    const { ref, selector } = await resolveBrowserTarget(guest, args);
+    const startedAt = Date.now();
+    await guest.executeJavaScript(
+      `(() => {
+        let el = null;
+        if (${JSON.stringify(ref)}) el = document.querySelector('[data-shanui-ref="' + CSS.escape(${JSON.stringify(ref)}) + '"]');
+        if (!el && ${JSON.stringify(selector)}) el = document.querySelector(${JSON.stringify(selector)});
+        if (!(el instanceof HTMLElement)) throw new Error('未找到目标元素');
+        el.scrollIntoView({ block: 'center', behavior: 'instant' });
+        el.click();
+        return true;
+      })()`,
+      true,
+    );
+    const timeoutMs = Math.max(100, Math.min(60000, Number(args?.timeout_ms) || 10000));
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const match = browserRecentDownloads.find((entry) => Number(entry.at || 0) >= startedAt);
+      if (match) {
+        return { type: 'text', text: JSON.stringify({ download: match }, null, 2) };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    throw new Error(`等待下载超时（${timeoutMs}ms）`);
   }
   if (tool === 'browser_dialog') {
     ensureBrowserDebugger(guest);
@@ -2147,6 +2339,7 @@ async function handleBrowserTool(tool, args) {
       true,
     );
     await prepareGuestInput(guest);
+    const clickCount = Math.max(1, Math.min(2, Number(args?.click_count) || 1));
     await Promise.race([
       (async () => {
         await guestInput(guest, 'Input.dispatchMouseEvent', {
@@ -2160,7 +2353,7 @@ async function handleBrowserTool(tool, args) {
           y: target.y,
           button: 'left',
           buttons: 1,
-          clickCount: 1,
+          clickCount,
         });
         await guestInput(guest, 'Input.dispatchMouseEvent', {
           type: 'mouseReleased',
@@ -2168,7 +2361,7 @@ async function handleBrowserTool(tool, args) {
           y: target.y,
           button: 'left',
           buttons: 0,
-          clickCount: 1,
+          clickCount,
         });
       })(),
       new Promise((resolve) => setTimeout(resolve, 1500)),
@@ -2180,6 +2373,7 @@ async function handleBrowserTool(tool, args) {
         text: target.text,
         x: target.x,
         y: target.y,
+        clickCount,
         ...(dialog ? { dialog: dialog.type } : {}),
       })}`,
     };
