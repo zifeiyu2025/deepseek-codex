@@ -1079,6 +1079,35 @@ body::before {
   cursor: not-allowed;
 }
 
+.browser-permission-card p strong {
+  margin: 0 3px;
+  color: var(--ink);
+}
+
+.browser-permission-url {
+  overflow-wrap: anywhere;
+  color: var(--faint) !important;
+  font-family: var(--mono);
+  font-size: 10px !important;
+}
+
+.browser-permission-hint {
+  color: var(--faint) !important;
+  font-size: 10.5px !important;
+}
+
+.browser-permission-actions .browser-permission-allow {
+  border-color: var(--copper);
+  background: var(--copper);
+  color: #17130c;
+  font-weight: 600;
+}
+
+.browser-permission-actions .browser-permission-deny {
+  border-color: rgba(232, 112, 112, 0.36);
+  color: rgba(232, 140, 140, 0.9);
+}
+
 /* ------------------------------------------------ engine controls */
 
 .thread-search {
@@ -7830,6 +7859,12 @@ pre::-webkit-scrollbar-button,
   border-color: rgba(110, 168, 254, 0.45);
   background: rgba(110, 168, 254, 0.14);
   color: var(--ink);
+}
+
+.browser-site-permissions button.denied {
+  border-color: rgba(232, 112, 112, 0.36);
+  color: rgba(232, 140, 140, 0.9);
+  text-decoration: line-through;
 }
 
 .browser-site-permissions button:disabled {

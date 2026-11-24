@@ -188,6 +188,7 @@ export function SettingsPanel({
           browserDownloadPolicy: 'allow',
           browserFileAccess: false,
           browserSitePermissions: {},
+          browserSiteDeniedPermissions: {},
           browserSiteDownloadPolicies: {},
         }),
       );
@@ -804,11 +805,14 @@ export function SettingsPanel({
                           const enabled = option.permissions.every((permission) =>
                             site.permissions.includes(permission),
                           );
+                          const denied = option.permissions.every((permission) =>
+                            site.deniedPermissions.includes(permission),
+                          );
                           return (
                             <button
                               type="button"
                               key={option.id}
-                              className={enabled ? 'on' : ''}
+                              className={`${enabled ? 'on' : ''} ${denied ? 'denied' : ''}`}
                               aria-pressed={enabled}
                               disabled={browserSiteBusy === site.host}
                               title={`${enabled ? '关闭' : '允许'} ${site.host} 的${option.label}权限`}

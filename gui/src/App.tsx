@@ -110,6 +110,7 @@ import type {
   AppConfig,
   ApprovalRequest,
   Automation,
+  BrowserPermissionRequest,
   CollaborationModeInfo,
   Item,
   MentionState,
@@ -128,6 +129,23 @@ import type {
 } from './types';
 
 type RailTab = 'files' | 'browser' | 'review';
+
+const BROWSER_PERMISSION_LABELS: Record<string, string> = {
+  media: '摄像头/麦克风',
+  geolocation: '位置信息',
+  notifications: '通知',
+  'clipboard-read': '读取剪贴板',
+  'clipboard-sanitized-write': '写入剪贴板',
+  fileSystem: '文件系统',
+  midiSysex: 'MIDI 设备',
+  usb: 'USB 设备',
+  serial: '串口设备',
+  hid: 'HID 设备',
+};
+
+function browserPermissionLabel(permission: string) {
+  return BROWSER_PERMISSION_LABELS[permission] || permission;
+}
 
 type McpElicitationState = {
   id: number | string;
@@ -247,6 +265,8 @@ export default function App() {
   const [subagentPanelOpen, setSubagentPanelOpen] = useState(false);
   const [subagentParentId, setSubagentParentId] = useState<string | null>(null);
   const [subagentMetadata, setSubagentMetadata] = useState<Record<string, ThreadSummary>>({});
+  const [browserPermissionRequest, setBrowserPermissionRequest] =
+    useState<BrowserPermissionRequest | null>(null);
   const [threadQuery, setThreadQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [readStates, setReadStates] = useState<Record<string, ThreadReadState>>({});
@@ -1951,6 +1971,22 @@ export default function App() {
       setRailOpen(true);
     });
   }, []);
+
+  useEffect(() => window.codex.onBrowserPermissionRequest(setBrowserPermissionRequest), []);
+
+  const respondBrowserPermission = useCallback(
+    async (decision: 'allow-once' | 'always-allow' | 'deny' | 'deny-once') => {
+      const request = browserPermissionRequest;
+      if (!request) return;
+      setBrowserPermissionRequest(null);
+      try {
+        await window.codex.respondBrowserPermission({ id: request.id, decision });
+      } catch (error: any) {
+        setNotice(friendlyClientError(error));
+      }
+    },
+    [browserPermissionRequest],
+  );
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -4994,6 +5030,46 @@ export default function App() {
                 onClick={saveProjectRename}
               >
                 保存
+              </button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {browserPermissionRequest ? (
+        <Modal
+          onClose={() => void respondBrowserPermission('deny')}
+          labelledBy="browser-permission-title"
+        >
+          <div className="key-card browser-permission-card">
+            <div className="key-kicker">SITE PERMISSION</div>
+            <h2 id="browser-permission-title">站点权限请求</h2>
+            <p>
+              <strong>{browserPermissionRequest.origin}</strong> 请求使用
+              <strong>{browserPermissionLabel(browserPermissionRequest.permission)}</strong>。
+            </p>
+            {browserPermissionRequest.requestedUrl &&
+            browserPermissionRequest.requestedUrl !== browserPermissionRequest.origin ? (
+              <p className="browser-permission-url">{browserPermissionRequest.requestedUrl}</p>
+            ) : null}
+            <p className="browser-permission-hint">
+              权限只对当前站点生效；拒绝不会影响其他站点。
+            </p>
+            <div className="key-actions browser-permission-actions">
+              <button
+                className="browser-permission-deny"
+                onClick={() => void respondBrowserPermission('deny')}
+              >
+                始终阻止
+              </button>
+              <button onClick={() => void respondBrowserPermission('allow-once')}>
+                仅本次允许
+              </button>
+              <button
+                className="browser-permission-allow"
+                onClick={() => void respondBrowserPermission('always-allow')}
+              >
+                始终允许
               </button>
             </div>
           </div>

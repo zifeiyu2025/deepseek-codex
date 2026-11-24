@@ -145,6 +145,10 @@ let browserGuest = null;
 let browserWaiters = [];
 let browserBridge = null;
 let browserBridgeToken = '';
+let nextBrowserPermissionPromptId = 1;
+let activeBrowserPermissionPromptId = null;
+const pendingBrowserPermissionPrompts = new Map();
+const browserPermissionPromptQueue = [];
 
 const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 
@@ -355,6 +359,7 @@ function readLocalToolsPrefs() {
     browserDownloadPolicy: 'allow',
     browserFileAccess: false,
     browserSitePermissions: {},
+    browserSiteDeniedPermissions: {},
     browserSiteDownloadPolicies: {},
   };
   try {
@@ -381,6 +386,9 @@ function readLocalToolsPrefs() {
       browserDownloadPolicy: saved?.browserDownloadPolicy === 'deny' ? 'deny' : 'allow',
       browserFileAccess: Boolean(saved?.browserFileAccess),
       browserSitePermissions: normalizeBrowserSitePermissions(saved?.browserSitePermissions),
+      browserSiteDeniedPermissions: normalizeBrowserSitePermissions(
+        saved?.browserSiteDeniedPermissions,
+      ),
       browserSiteDownloadPolicies: normalizeBrowserSiteDownloadPolicies(
         saved?.browserSiteDownloadPolicies,
       ),
@@ -951,13 +959,96 @@ function normalizeBrowserSiteDownloadPolicies(value) {
   return result;
 }
 
-function browserSitePermissionAllowed(permission, rawOrigin, prefs = readLocalToolsPrefs()) {
-  if (permission === 'fullscreen') return true;
-  if (permission === 'fileSystem' && prefs.browserFileAccess) return true;
-  if (!BROWSER_SITE_PERMISSION_NAMES.has(permission)) return false;
+function browserSitePermissionDecision(permission, rawOrigin, prefs = readLocalToolsPrefs()) {
+  if (permission === 'fullscreen') return 'allow';
+  if (permission === 'fileSystem' && prefs.browserFileAccess) return 'allow';
+  if (!BROWSER_SITE_PERMISSION_NAMES.has(permission)) return 'deny';
   const origin = normalizeBrowserOrigin(rawOrigin);
-  if (!origin) return false;
-  return (prefs.browserSitePermissions?.[origin] || []).includes(permission);
+  if (!origin) return 'deny';
+  if ((prefs.browserSitePermissions?.[origin] || []).includes(permission)) return 'allow';
+  if ((prefs.browserSiteDeniedPermissions?.[origin] || []).includes(permission)) {
+    return 'deny';
+  }
+  return 'ask';
+}
+
+function setBrowserSitePermissionDecision(rawOrigin, permission, decision) {
+  const origin = normalizeBrowserOrigin(rawOrigin);
+  if (!origin || !BROWSER_SITE_PERMISSION_NAMES.has(permission)) return;
+  const prefs = readLocalToolsPrefs();
+  const allowed = new Set(prefs.browserSitePermissions?.[origin] || []);
+  const denied = new Set(prefs.browserSiteDeniedPermissions?.[origin] || []);
+  allowed.delete(permission);
+  denied.delete(permission);
+  if (decision === 'allow') allowed.add(permission);
+  if (decision === 'deny') denied.add(permission);
+  const nextAllowed = { ...prefs.browserSitePermissions };
+  const nextDenied = { ...prefs.browserSiteDeniedPermissions };
+  if (allowed.size) nextAllowed[origin] = [...allowed].sort();
+  else delete nextAllowed[origin];
+  if (denied.size) nextDenied[origin] = [...denied].sort();
+  else delete nextDenied[origin];
+  prefs.browserSitePermissions = normalizeBrowserSitePermissions(nextAllowed);
+  prefs.browserSiteDeniedPermissions = normalizeBrowserSitePermissions(nextDenied);
+  writeLocalToolsPrefs(prefs);
+}
+
+function showNextBrowserPermissionPrompt() {
+  if (activeBrowserPermissionPromptId || !browserPermissionPromptQueue.length) return;
+  const entry = browserPermissionPromptQueue.shift();
+  activeBrowserPermissionPromptId = entry.id;
+  entry.timer = setTimeout(() => {
+    settleBrowserPermissionPrompt(entry.id, 'deny-once');
+  }, 115000);
+  pendingBrowserPermissionPrompts.set(entry.id, entry);
+  appendMainLog(
+    `browser permission prompt: ${entry.permission} ${entry.origin} ready=${rendererReady}`,
+  );
+  const payload = {
+    id: entry.id,
+    origin: entry.origin,
+    permission: entry.permission,
+    requestedUrl: entry.requestedUrl,
+  };
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+    win.webContents.send('browser:permission-request', payload);
+  } else {
+    sendToRenderer('browser:permission-request', payload);
+  }
+}
+
+function settleBrowserPermissionPrompt(id, decision) {
+  const entry = pendingBrowserPermissionPrompts.get(String(id));
+  if (!entry) return false;
+  pendingBrowserPermissionPrompts.delete(entry.id);
+  clearTimeout(entry.timer);
+  if (activeBrowserPermissionPromptId === entry.id) activeBrowserPermissionPromptId = null;
+  let granted = false;
+  if (decision === 'allow-once') {
+    granted = true;
+  } else if (decision === 'always-allow') {
+    setBrowserSitePermissionDecision(entry.origin, entry.permission, 'allow');
+    granted = true;
+  } else if (decision === 'deny') {
+    setBrowserSitePermissionDecision(entry.origin, entry.permission, 'deny');
+  }
+  entry.resolve(granted);
+  queueMicrotask(showNextBrowserPermissionPrompt);
+  return true;
+}
+
+function requestBrowserPermission(permission, origin, requestedUrl) {
+  return new Promise((resolve) => {
+    const id = `browser-permission-${nextBrowserPermissionPromptId++}`;
+    browserPermissionPromptQueue.push({
+      id,
+      origin,
+      permission,
+      requestedUrl,
+      resolve,
+    });
+    showNextBrowserPermissionPrompt();
+  });
 }
 
 function browserDownloadAllowed(rawUrl, prefs = readLocalToolsPrefs()) {
@@ -986,10 +1077,29 @@ function browserPermissionAllowedForRequest(
   details,
   requestingOrigin,
 ) {
-  return browserSitePermissionAllowed(
-    permission,
-    browserRequestOrigin(contents, details, requestingOrigin),
-  );
+  const origin = browserRequestOrigin(contents, details, requestingOrigin);
+  return origin ? browserSitePermissionDecision(permission, origin) === 'allow' : false;
+}
+
+async function browserPermissionRequestAllowed(
+  contents,
+  permission,
+  details,
+  requestingOrigin,
+) {
+  const origin = browserRequestOrigin(contents, details, requestingOrigin);
+  if (!origin) return false;
+  const decision = browserSitePermissionDecision(permission, origin);
+  appendMainLog(`browser permission request: ${permission} ${origin} -> ${decision}`);
+  if (decision === 'allow') return true;
+  if (decision === 'deny') return false;
+  let requestedUrl = origin;
+  try {
+    requestedUrl = details?.requestingUrl || contents?.getURL() || origin;
+  } catch {
+    requestedUrl = origin;
+  }
+  return requestBrowserPermission(permission, origin, requestedUrl);
 }
 
 function attachBrowserGuest(contents) {
@@ -1003,8 +1113,10 @@ function attachBrowserGuest(contents) {
     }
     return { action: 'deny' };
   });
-  contents.session.setPermissionRequestHandler((requesting, permission, callback, details) =>
-    callback(browserPermissionAllowedForRequest(requesting, permission, details)),
+  contents.session.setPermissionRequestHandler(
+    async (requesting, permission, callback, details) => {
+      callback(await browserPermissionRequestAllowed(requesting, permission, details));
+    },
   );
   contents.session.setPermissionCheckHandler(
     (requesting, permission, requestingOrigin, details) =>
@@ -2170,8 +2282,8 @@ function createWindow() {
       if (!/^https?:\/\//i.test(url)) event.preventDefault();
     });
     contents.session.setPermissionRequestHandler(
-      (requesting, permission, callback, details) => {
-        callback(browserPermissionAllowedForRequest(requesting, permission, details));
+      async (requesting, permission, callback, details) => {
+        callback(await browserPermissionRequestAllowed(requesting, permission, details));
       },
     );
     contents.session.setPermissionCheckHandler(
@@ -2580,6 +2692,11 @@ async function listBrowserSiteData(historyOrigins) {
           origins.flatMap((origin) => prefs.browserSitePermissions?.[origin] || []),
         ),
       ].sort();
+      const deniedPermissions = [
+        ...new Set(
+          origins.flatMap((origin) => prefs.browserSiteDeniedPermissions?.[origin] || []),
+        ),
+      ].sort();
       const policies = origins
         .map((origin) => prefs.browserSiteDownloadPolicies?.[origin])
         .filter(Boolean);
@@ -2598,6 +2715,7 @@ async function listBrowserSiteData(historyOrigins) {
         hasHistory: site.hasHistory,
         partitions: [...site.partitions],
         permissions,
+        deniedPermissions,
         downloadPolicy,
       };
     })
@@ -2680,18 +2798,38 @@ handleIpc('browser:set-site-permissions', (_event, payload) => {
   if (!permissions.length) throw new Error('站点权限无效');
   const enabled = Boolean(payload?.enabled);
   const prefs = readLocalToolsPrefs();
-  const next = { ...prefs.browserSitePermissions };
+  const nextAllowed = { ...prefs.browserSitePermissions };
+  const nextDenied = { ...prefs.browserSiteDeniedPermissions };
   for (const origin of origins) {
-    const current = new Set(next[origin] || []);
+    const allowed = new Set(nextAllowed[origin] || []);
+    const denied = new Set(nextDenied[origin] || []);
     for (const permission of permissions) {
-      if (enabled) current.add(permission);
-      else current.delete(permission);
+      allowed.delete(permission);
+      denied.delete(permission);
+      if (enabled) allowed.add(permission);
+      else denied.add(permission);
     }
-    if (current.size) next[origin] = [...current].sort();
-    else delete next[origin];
+    if (allowed.size) nextAllowed[origin] = [...allowed].sort();
+    else delete nextAllowed[origin];
+    if (denied.size) nextDenied[origin] = [...denied].sort();
+    else delete nextDenied[origin];
   }
-  prefs.browserSitePermissions = normalizeBrowserSitePermissions(next);
+  prefs.browserSitePermissions = normalizeBrowserSitePermissions(nextAllowed);
+  prefs.browserSiteDeniedPermissions = normalizeBrowserSitePermissions(nextDenied);
   return writeLocalToolsPrefs(prefs);
+});
+
+handleIpc('browser:respond-permission', (_event, payload) => {
+  const decision = ['allow-once', 'always-allow', 'deny', 'deny-once'].includes(
+    payload?.decision,
+  )
+    ? payload.decision
+    : null;
+  if (!decision || !payload?.id) throw new Error('站点权限响应无效');
+  if (!settleBrowserPermissionPrompt(String(payload.id), decision)) {
+    throw new Error('站点权限请求已失效');
+  }
+  return true;
 });
 
 handleIpc('browser:set-site-download-policy', (_event, payload) => {
@@ -2908,6 +3046,9 @@ handleIpc('app:set-local-tools', async (_event, payload) => {
     browserFileAccess: Boolean(payload?.browserFileAccess),
     browserSitePermissions: normalizeBrowserSitePermissions(
       payload?.browserSitePermissions,
+    ),
+    browserSiteDeniedPermissions: normalizeBrowserSitePermissions(
+      payload?.browserSiteDeniedPermissions,
     ),
     browserSiteDownloadPolicies: normalizeBrowserSiteDownloadPolicies(
       payload?.browserSiteDownloadPolicies,

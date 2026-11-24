@@ -22,7 +22,7 @@ function getJson(url) {
   });
 }
 
-async function evaluateCdpTarget(target, expression) {
+async function evaluateCdpTarget(target, expression, userGesture = false) {
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     socket.addEventListener('open', resolve, { once: true });
@@ -42,7 +42,7 @@ async function evaluateCdpTarget(target, expression) {
         JSON.stringify({
           id,
           method: 'Runtime.evaluate',
-          params: { expression, awaitPromise: true, returnByValue: true },
+          params: { expression, awaitPromise: true, returnByValue: true, userGesture },
         }),
       );
     });
@@ -645,8 +645,9 @@ async function evaluateCdpTarget(target, expression) {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     response.end('<!doctype html><title>permission smoke</title><p>permission smoke</p>');
   });
-  await new Promise((resolve) => permissionServer.listen(0, '127.0.0.1', resolve));
-  const permissionOrigin = `http://127.0.0.1:${permissionServer.address().port}`;
+  await new Promise((resolve) => permissionServer.listen(0, resolve));
+  const permissionPort = permissionServer.address().port;
+  const permissionOrigin = `http://127.0.0.1:${permissionPort}`;
   try {
     await evaluate(`window.codex.browserSetSitePermissions({
       origins:[${JSON.stringify(permissionOrigin)}],
@@ -682,6 +683,62 @@ async function evaluateCdpTarget(target, expression) {
       '浏览器站点权限生效',
       Boolean(guestTarget) && notification === 'granted' && geolocation === 'granted',
       JSON.stringify({ guest: Boolean(guestTarget), notification, geolocation }),
+    );
+
+    const promptOrigin = `http://localhost:${permissionPort}`;
+    await evaluate(
+      `window.dispatchEvent(new CustomEvent('deepseek-codex:browser-open',{detail:{url:${JSON.stringify(promptOrigin)}}})); true`,
+    );
+    let promptTarget = null;
+    for (let attempt = 0; attempt < 66 && !promptTarget; attempt += 1) {
+      await sleep(150);
+      const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
+      promptTarget = targets.find(
+        (target) =>
+          target.webSocketDebuggerUrl && target.url.startsWith(promptOrigin),
+      );
+    }
+    let promptVisible = false;
+    let promptResult = '';
+    if (promptTarget) {
+      await evaluate(
+        "(()=>{window.__permissionEvents=[];window.__permissionUnsubscribe=window.codex.onBrowserPermissionRequest(request=>window.__permissionEvents.push(request));return true;})()",
+      );
+      await sleep(500);
+      await evaluateCdpTarget(
+        promptTarget,
+        "(()=>{window.__shanuiPermissionPromise=Notification.requestPermission();return 'started';})()",
+        true,
+      );
+      for (let attempt = 0; attempt < 40 && !promptVisible; attempt += 1) {
+        await sleep(150);
+        promptVisible = await evaluate(
+          "!!document.querySelector('.browser-permission-card')",
+        );
+      }
+      if (promptVisible) {
+        await evaluate(
+          "[...document.querySelectorAll('.browser-permission-actions button')].find(button=>button.textContent.includes('始终允许'))?.click(); true",
+        );
+        await sleep(300);
+      }
+      promptResult = await evaluateCdpTarget(
+        promptTarget,
+        "window.__shanuiPermissionPromise ? Promise.race([window.__shanuiPermissionPromise.then(value=>'value:'+value),new Promise(resolve=>setTimeout(()=>resolve('pending'),1000))]) : ''",
+      );
+    }
+    const promptEvents = await evaluate(
+      "JSON.stringify(window.__permissionEvents||[])",
+    );
+    check(
+      '浏览器权限请求弹窗',
+      Boolean(promptTarget) && promptVisible && promptResult === 'value:granted',
+      JSON.stringify({
+        guest: Boolean(promptTarget),
+        promptVisible,
+        promptResult,
+        promptEvents: JSON.parse(promptEvents || '[]').length,
+      }),
     );
   } finally {
     await evaluate(`window.codex.browserSetSitePermissions({

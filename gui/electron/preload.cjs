@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('codex', {
     ipcRenderer.invoke('browser:set-site-permissions', payload),
   browserSetSiteDownloadPolicy: (payload) =>
     ipcRenderer.invoke('browser:set-site-download-policy', payload),
+  respondBrowserPermission: (payload) =>
+    ipcRenderer.invoke('browser:respond-permission', payload),
   browserActivate: (webContentsId) => ipcRenderer.invoke('browser:activate', webContentsId),
   captureScreen: () => ipcRenderer.invoke('app:capture-screen'),
   browserSavePageShot: (dataUrl) => ipcRenderer.invoke('browser:save-page-shot', dataUrl),
@@ -71,6 +73,8 @@ contextBridge.exposeInMainWorld('codex', {
   onStatus: (callback) => subscribe('app:status', callback),
   onTrayAction: (callback) => subscribe('tray:action', callback),
   onBrowserOpen: (callback) => subscribe('browser:open', callback),
+  onBrowserPermissionRequest: (callback) =>
+    subscribe('browser:permission-request', callback),
 });
 
 contextBridge.exposeInMainWorld('desktop', {

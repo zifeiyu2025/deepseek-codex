@@ -288,6 +288,7 @@ export type LocalToolsPrefs = {
   browserDownloadPolicy: 'allow' | 'deny';
   browserFileAccess: boolean;
   browserSitePermissions: Record<string, string[]>;
+  browserSiteDeniedPermissions: Record<string, string[]>;
   browserSiteDownloadPolicies: Record<string, 'allow' | 'deny'>;
 };
 
@@ -298,7 +299,15 @@ export type BrowserSiteData = {
   hasHistory: boolean;
   partitions: ('browser' | 'webTools')[];
   permissions: string[];
+  deniedPermissions: string[];
   downloadPolicy: 'allow' | 'deny' | 'default' | 'mixed';
+};
+
+export type BrowserPermissionRequest = {
+  id: string;
+  origin: string;
+  permission: string;
+  requestedUrl: string;
 };
 
 export type ComputerApp = {
@@ -369,6 +378,13 @@ declare global {
         origins: string[];
         policy: 'default' | 'allow' | 'deny';
       }): Promise<LocalToolsPrefs>;
+      respondBrowserPermission(payload: {
+        id: string;
+        decision: 'allow-once' | 'always-allow' | 'deny' | 'deny-once';
+      }): Promise<boolean>;
+      onBrowserPermissionRequest(
+        callback: (request: BrowserPermissionRequest) => void,
+      ): () => void;
       browserActivate(webContentsId: number): Promise<boolean>;
       captureScreen(): Promise<string>;
       browserSavePageShot(dataUrl: string): Promise<string>;
