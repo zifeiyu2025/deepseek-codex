@@ -13,6 +13,23 @@ import { friendlyClientError } from './lib/errors';
 import { effortLabel, formatTokens } from './lib/format';
 import { readStorage, removeStorage } from './lib/storage';
 
+const BROWSER_SITE_PERMISSION_OPTIONS = [
+  { id: 'media', label: '相机/麦克风', permissions: ['media'] },
+  { id: 'geolocation', label: '定位', permissions: ['geolocation'] },
+  { id: 'notifications', label: '通知', permissions: ['notifications'] },
+  {
+    id: 'clipboard',
+    label: '剪贴板',
+    permissions: ['clipboard-read', 'clipboard-sanitized-write'],
+  },
+  { id: 'fileSystem', label: '文件系统', permissions: ['fileSystem'] },
+  {
+    id: 'devices',
+    label: 'USB/串口/HID',
+    permissions: ['usb', 'serial', 'hid', 'midiSysex'],
+  },
+] as const;
+
 export function SettingsPanel({
   settings,
   effortOptions,
@@ -170,6 +187,8 @@ export function SettingsPanel({
           browserFullCdp: false,
           browserDownloadPolicy: 'allow',
           browserFileAccess: false,
+          browserSitePermissions: {},
+          browserSiteDownloadPolicies: {},
         }),
       );
   }, [tab]);
@@ -280,6 +299,50 @@ export function SettingsPanel({
           .filter((entry) => entry.cookieCount > 0 || entry.hasHistory),
       );
       setSettingsNotice(`已清除 ${site.host} 的站点数据`);
+    } catch (error: any) {
+      setSettingsNotice(friendlyClientError(error));
+    } finally {
+      setBrowserSiteBusy(null);
+    }
+  };
+
+  const setBrowserSitePermission = async (
+    site: BrowserSiteData,
+    permissionIds: readonly string[],
+    enabled: boolean,
+  ) => {
+    if (!site.origins.length) return;
+    setBrowserSiteBusy(site.host);
+    try {
+      const saved = await window.codex.browserSetSitePermissions({
+        origins: site.origins,
+        permissions: [...permissionIds],
+        enabled,
+      });
+      setLocalTools(saved);
+      await refreshBrowserSites();
+      setSettingsNotice(`${site.host} 的站点权限已更新`);
+    } catch (error: any) {
+      setSettingsNotice(friendlyClientError(error));
+    } finally {
+      setBrowserSiteBusy(null);
+    }
+  };
+
+  const setBrowserSiteDownloadPolicy = async (
+    site: BrowserSiteData,
+    policy: 'default' | 'allow' | 'deny',
+  ) => {
+    if (!site.origins.length) return;
+    setBrowserSiteBusy(site.host);
+    try {
+      const saved = await window.codex.browserSetSiteDownloadPolicy({
+        origins: site.origins,
+        policy,
+      });
+      setLocalTools(saved);
+      await refreshBrowserSites();
+      setSettingsNotice(`${site.host} 的下载策略已更新`);
     } catch (error: any) {
       setSettingsNotice(friendlyClientError(error));
     } finally {
@@ -724,7 +787,7 @@ export function SettingsPanel({
               <div className="browser-site-list">
                 {(showAllSites ? browserSites : browserSites.slice(0, 8)).map((site) => (
                   <div className="browser-site-row" key={site.host}>
-                    <div>
+                    <div className="browser-site-detail">
                       <strong>{site.host}</strong>
                       <span>
                         {[
@@ -736,15 +799,65 @@ export function SettingsPanel({
                           .filter(Boolean)
                           .join(' · ')}
                       </span>
+                      <div className="browser-site-permissions">
+                        {BROWSER_SITE_PERMISSION_OPTIONS.map((option) => {
+                          const enabled = option.permissions.every((permission) =>
+                            site.permissions.includes(permission),
+                          );
+                          return (
+                            <button
+                              type="button"
+                              key={option.id}
+                              className={enabled ? 'on' : ''}
+                              aria-pressed={enabled}
+                              disabled={browserSiteBusy === site.host}
+                              title={`${enabled ? '关闭' : '允许'} ${site.host} 的${option.label}权限`}
+                              onClick={() =>
+                                void setBrowserSitePermission(
+                                  site,
+                                  option.permissions,
+                                  !enabled,
+                                )
+                              }
+                            >
+                              {option.label}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                    <button
-                      className="settings-button"
-                      disabled={browserSiteBusy === site.host}
-                      onClick={() => void clearBrowserSite(site)}
-                    >
-                      {browserSiteBusy === site.host ? <Loader2 className="spin" size={14} /> : null}
-                      清除
-                    </button>
+                    <div className="browser-site-actions">
+                      <select
+                        className="browser-site-download"
+                        aria-label={`${site.host} 下载策略`}
+                        value={
+                          site.downloadPolicy === 'allow' || site.downloadPolicy === 'deny'
+                            ? site.downloadPolicy
+                            : 'default'
+                        }
+                        disabled={browserSiteBusy === site.host}
+                        onChange={(event) =>
+                          void setBrowserSiteDownloadPolicy(
+                            site,
+                            event.target.value as 'default' | 'allow' | 'deny',
+                          )
+                        }
+                      >
+                        <option value="default">下载：跟随全局</option>
+                        <option value="allow">下载：允许</option>
+                        <option value="deny">下载：阻止</option>
+                      </select>
+                      <button
+                        className="settings-button"
+                        disabled={browserSiteBusy === site.host}
+                        onClick={() => void clearBrowserSite(site)}
+                      >
+                        {browserSiteBusy === site.host ? (
+                          <Loader2 className="spin" size={14} />
+                        ) : null}
+                        清除
+                      </button>
+                    </div>
                   </div>
                 ))}
                 {browserSites.length > 8 ? (
@@ -909,7 +1022,7 @@ export function SettingsPanel({
               <div className="setting-row">
                 <div className="setting-row-text">
                   <strong>文件系统与上传</strong>
-                  <span>允许网站使用文件系统访问 API；传统上传仍由系统文件选择器确认</span>
+                  <span>对所有站点开放文件系统访问 API；也可在下方按站点逐项开启</span>
                 </div>
                 <button
                   className={`switch ${localTools.browserFileAccess ? 'on' : ''}`}

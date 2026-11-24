@@ -1655,6 +1655,24 @@ const browserTools = [
     },
   },
   {
+    name: 'browser_upload',
+    description:
+      'Upload one or more local files through a file input in the in-app browser. Requires an explicit user confirmation before the files are sent to the site.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'File input ref from browser_snapshot' },
+        selector: { type: 'string', description: 'CSS selector for the file input' },
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Absolute local file paths, up to 10 files',
+        },
+      },
+      required: ['paths'],
+    },
+  },
+  {
     name: 'browser_press_key',
     description: 'Press a navigation or editing key in the in-app browser.',
     inputSchema: {

@@ -346,6 +346,43 @@ function getJson(url) {
       windowsShortcutBlocked,
     JSON.stringify({ keyChord, keyPoint, windowsShortcutBlocked }),
   );
+  const browserTools = JSON.parse(
+    await evaluate(`(async()=>{
+      const before=await window.codex.localToolsStatus();
+      try {
+        await window.codex.setLocalTools({...before,browser:true});
+        const config=await window.codex.getConfig();
+        const created=await window.codex.request('thread/start',{
+          cwd:config.defaultCwd,
+          model:config.defaultModel,
+          modelProvider:config.defaultProvider,
+          threadSource:'user',
+          approvalPolicy:'never',
+          sandbox:'danger-full-access',
+          ephemeral:true
+        });
+        const status=await window.codex.request('mcpServerStatus/list',{
+          threadId:created.thread.id,
+          serverName:'shanui_local',
+          detail:'toolsAndAuthOnly'
+        });
+        const server=(status.data||[]).find(entry=>entry.name==='shanui_local');
+        const names=Object.keys(server?.tools||{});
+        return JSON.stringify({
+          snapshot:names.includes('browser_snapshot'),
+          upload:names.includes('browser_upload'),
+          evalTool:names.includes('browser_eval')
+        });
+      } finally {
+        await window.codex.setLocalTools(before);
+      }
+    })()`),
+  );
+  check(
+    '浏览器工具集',
+    browserTools.snapshot && browserTools.upload && !browserTools.evalTool,
+    JSON.stringify(browserTools),
+  );
   const browserPrivacy = JSON.parse(
     await evaluate(`(async()=>{
       const before=await window.codex.localToolsStatus();
@@ -356,13 +393,35 @@ function getJson(url) {
           host:'example.com',
           origins:['https://example.com/docs'],
         });
+        await window.codex.browserSetSitePermissions({
+          origins:['https://example.com/docs'],
+          permissions:['media','geolocation'],
+          enabled:true,
+        });
+        await window.codex.browserSetSiteDownloadPolicy({
+          origins:['https://example.com/docs'],
+          policy:'allow',
+        });
+        const configured=(await window.codex.browserListSiteData(['https://example.com/docs']))
+          .find(site=>site.host==='example.com');
+        const sitePermissions=configured?.permissions?.includes('media')&&configured?.permissions?.includes('geolocation');
+        const siteDownload=configured?.downloadPolicy==='allow';
+        await window.codex.browserSetSitePermissions({
+          origins:['https://example.com/docs'],
+          permissions:['media','geolocation'],
+          enabled:false,
+        });
+        await window.codex.browserSetSiteDownloadPolicy({
+          origins:['https://example.com/docs'],
+          policy:'default',
+        });
         const saved=await window.codex.setLocalTools({
           ...before,
           browserDownloadPolicy:'deny',
           browserFileAccess:true,
         });
         const persisted=saved.browserDownloadPolicy==='deny'&&saved.browserFileAccess===true;
-        return JSON.stringify({listed,cleared:cleared===true,persisted});
+        return JSON.stringify({listed,cleared:cleared===true,sitePermissions,siteDownload,persisted});
       } finally {
         await window.codex.setLocalTools(before);
       }
@@ -370,7 +429,11 @@ function getJson(url) {
   );
   check(
     '浏览器站点数据与传输权限',
-    browserPrivacy.listed && browserPrivacy.cleared && browserPrivacy.persisted,
+    browserPrivacy.listed &&
+      browserPrivacy.cleared &&
+      browserPrivacy.sitePermissions &&
+      browserPrivacy.siteDownload &&
+      browserPrivacy.persisted,
     JSON.stringify(browserPrivacy),
   );
   await evaluate("document.querySelector('.settings-back')?.click(); true");

@@ -21,6 +21,10 @@ contextBridge.exposeInMainWorld('codex', {
   browserListSiteData: (historyOrigins) =>
     ipcRenderer.invoke('browser:list-site-data', historyOrigins),
   browserClearSiteData: (payload) => ipcRenderer.invoke('browser:clear-site-data', payload),
+  browserSetSitePermissions: (payload) =>
+    ipcRenderer.invoke('browser:set-site-permissions', payload),
+  browserSetSiteDownloadPolicy: (payload) =>
+    ipcRenderer.invoke('browser:set-site-download-policy', payload),
   browserActivate: (webContentsId) => ipcRenderer.invoke('browser:activate', webContentsId),
   captureScreen: () => ipcRenderer.invoke('app:capture-screen'),
   browserSavePageShot: (dataUrl) => ipcRenderer.invoke('browser:save-page-shot', dataUrl),

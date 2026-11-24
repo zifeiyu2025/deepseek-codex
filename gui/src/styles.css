@@ -7738,6 +7738,56 @@ pre::-webkit-scrollbar-button,
   gap: 2px;
 }
 
+.browser-site-detail {
+  flex: 1;
+}
+
+.browser-site-permissions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.browser-site-permissions button {
+  padding: 2px 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: none;
+  color: var(--faint);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.browser-site-permissions button.on {
+  border-color: rgba(110, 168, 254, 0.45);
+  background: rgba(110, 168, 254, 0.14);
+  color: var(--ink);
+}
+
+.browser-site-permissions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.browser-site-actions {
+  display: flex !important;
+  flex: none;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px;
+}
+
+.browser-site-download {
+  max-width: 124px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #17171a;
+  color: var(--ink-dim);
+  font-size: 10px;
+}
+
 .browser-site-row strong {
   overflow: hidden;
   color: var(--ink-dim);

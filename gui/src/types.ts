@@ -286,6 +286,8 @@ export type LocalToolsPrefs = {
   browserFullCdp: boolean;
   browserDownloadPolicy: 'allow' | 'deny';
   browserFileAccess: boolean;
+  browserSitePermissions: Record<string, string[]>;
+  browserSiteDownloadPolicies: Record<string, 'allow' | 'deny'>;
 };
 
 export type BrowserSiteData = {
@@ -294,6 +296,8 @@ export type BrowserSiteData = {
   cookieCount: number;
   hasHistory: boolean;
   partitions: ('browser' | 'webTools')[];
+  permissions: string[];
+  downloadPolicy: 'allow' | 'deny' | 'default' | 'mixed';
 };
 
 export type ComputerApp = {
@@ -355,6 +359,15 @@ declare global {
       }): Promise<boolean>;
       browserListSiteData(historyOrigins: string[]): Promise<BrowserSiteData[]>;
       browserClearSiteData(payload: { host: string; origins: string[] }): Promise<boolean>;
+      browserSetSitePermissions(payload: {
+        origins: string[];
+        permissions: string[];
+        enabled: boolean;
+      }): Promise<LocalToolsPrefs>;
+      browserSetSiteDownloadPolicy(payload: {
+        origins: string[];
+        policy: 'default' | 'allow' | 'deny';
+      }): Promise<LocalToolsPrefs>;
       browserActivate(webContentsId: number): Promise<boolean>;
       captureScreen(): Promise<string>;
       browserSavePageShot(dataUrl: string): Promise<string>;

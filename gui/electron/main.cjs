@@ -234,7 +234,7 @@ function downloadsFile() {
 function setupDownloadTracking() {
   const browserSession = session.fromPartition('persist:shanui-browser');
   browserSession.on('will-download', (event, item) => {
-    if (readLocalToolsPrefs().browserDownloadPolicy === 'deny') {
+    if (!browserDownloadAllowed(item.getURL())) {
       event.preventDefault();
       item.cancel();
       return;
@@ -354,6 +354,8 @@ function readLocalToolsPrefs() {
     browserFullCdp: false,
     browserDownloadPolicy: 'allow',
     browserFileAccess: false,
+    browserSitePermissions: {},
+    browserSiteDownloadPolicies: {},
   };
   try {
     const saved = JSON.parse(fs.readFileSync(localToolsPrefsFile(), 'utf8'));
@@ -378,6 +380,10 @@ function readLocalToolsPrefs() {
       browserFullCdp: Boolean(saved?.browserFullCdp),
       browserDownloadPolicy: saved?.browserDownloadPolicy === 'deny' ? 'deny' : 'allow',
       browserFileAccess: Boolean(saved?.browserFileAccess),
+      browserSitePermissions: normalizeBrowserSitePermissions(saved?.browserSitePermissions),
+      browserSiteDownloadPolicies: normalizeBrowserSiteDownloadPolicies(
+        saved?.browserSiteDownloadPolicies,
+      ),
     };
   } catch {
     return fallback;
@@ -501,13 +507,16 @@ function localMcpServerConfig(prefs) {
       SHANUI_BROWSER_FULL_CDP: prefs.browserFullCdp ? '1' : '0',
       SHANUI_COMPUTER_HISTORY_FILE: computerHistoryFile(),
     },
-    ...(prefs.computer
-      ? {
-          tools: Object.fromEntries(
-            COMPUTER_TOOL_NAMES.map((name) => [name, { approval_mode: 'approve' }]),
-          ),
+    ...(() => {
+      const approvals = {};
+      if (prefs.computer) {
+        for (const name of COMPUTER_TOOL_NAMES) {
+          approvals[name] = { approval_mode: 'approve' };
         }
-      : {}),
+      }
+      if (prefs.browser) approvals.browser_upload = { approval_mode: 'approve' };
+      return Object.keys(approvals).length ? { tools: approvals } : {};
+    })(),
     default_tools_approval_mode: 'prompt',
     tool_timeout_sec: 120,
   };
@@ -892,8 +901,95 @@ function browserBridgeFile() {
   return path.join(codexHome, 'shanui-bridge.json');
 }
 
-function browserFileSystemPermissionAllowed(permission) {
-  return permission === 'fileSystem' && readLocalToolsPrefs().browserFileAccess;
+const BROWSER_SITE_PERMISSION_NAMES = new Set([
+  'media',
+  'geolocation',
+  'notifications',
+  'clipboard-read',
+  'clipboard-sanitized-write',
+  'fileSystem',
+  'midiSysex',
+  'usb',
+  'serial',
+  'hid',
+]);
+
+function normalizeBrowserSitePermissions(value) {
+  const result = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return result;
+  let count = 0;
+  for (const [rawOrigin, rawPermissions] of Object.entries(value)) {
+    if (count >= 200) break;
+    const origin = normalizeBrowserOrigin(rawOrigin);
+    if (!origin || !Array.isArray(rawPermissions)) continue;
+    const permissions = [
+      ...new Set(
+        rawPermissions.filter(
+          (permission) =>
+            typeof permission === 'string' && BROWSER_SITE_PERMISSION_NAMES.has(permission),
+        ),
+      ),
+    ].sort();
+    if (!permissions.length) continue;
+    result[origin] = permissions;
+    count += 1;
+  }
+  return result;
+}
+
+function normalizeBrowserSiteDownloadPolicies(value) {
+  const result = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return result;
+  let count = 0;
+  for (const [rawOrigin, policy] of Object.entries(value)) {
+    if (count >= 200) break;
+    const origin = normalizeBrowserOrigin(rawOrigin);
+    if (!origin || (policy !== 'allow' && policy !== 'deny')) continue;
+    result[origin] = policy;
+    count += 1;
+  }
+  return result;
+}
+
+function browserSitePermissionAllowed(permission, rawOrigin, prefs = readLocalToolsPrefs()) {
+  if (permission === 'fullscreen') return true;
+  if (permission === 'fileSystem' && prefs.browserFileAccess) return true;
+  if (!BROWSER_SITE_PERMISSION_NAMES.has(permission)) return false;
+  const origin = normalizeBrowserOrigin(rawOrigin);
+  if (!origin) return false;
+  return (prefs.browserSitePermissions?.[origin] || []).includes(permission);
+}
+
+function browserDownloadAllowed(rawUrl, prefs = readLocalToolsPrefs()) {
+  const origin = normalizeBrowserOrigin(rawUrl);
+  const sitePolicy = origin ? prefs.browserSiteDownloadPolicies?.[origin] : null;
+  if (sitePolicy === 'deny') return false;
+  if (sitePolicy === 'allow') return true;
+  return prefs.browserDownloadPolicy !== 'deny';
+}
+
+function browserRequestOrigin(contents, details, requestingOrigin) {
+  let candidate = requestingOrigin || '';
+  if (!candidate) {
+    try {
+      candidate = details?.requestingUrl || contents?.getURL() || '';
+    } catch {
+      candidate = '';
+    }
+  }
+  return normalizeBrowserOrigin(candidate);
+}
+
+function browserPermissionAllowedForRequest(
+  contents,
+  permission,
+  details,
+  requestingOrigin,
+) {
+  return browserSitePermissionAllowed(
+    permission,
+    browserRequestOrigin(contents, details, requestingOrigin),
+  );
 }
 
 function attachBrowserGuest(contents) {
@@ -907,11 +1003,17 @@ function attachBrowserGuest(contents) {
     }
     return { action: 'deny' };
   });
-  contents.session.setPermissionRequestHandler((_contents, permission, callback) =>
-    callback(browserFileSystemPermissionAllowed(permission)),
+  contents.session.setPermissionRequestHandler((requesting, permission, callback, details) =>
+    callback(browserPermissionAllowedForRequest(requesting, permission, details)),
   );
-  contents.session.setPermissionCheckHandler((_contents, permission) =>
-    browserFileSystemPermissionAllowed(permission),
+  contents.session.setPermissionCheckHandler(
+    (requesting, permission, requestingOrigin, details) =>
+      browserPermissionAllowedForRequest(
+        requesting,
+        permission,
+        details,
+        requestingOrigin,
+      ),
   );
   const waiters = browserWaiters;
   browserWaiters = [];
@@ -1441,6 +1543,99 @@ async function handleBrowserTool(tool, args) {
     await guest.insertText(nextText);
     if (args?.submit) await guestPressKey(guest, 'enter');
     return { type: 'text', text: `已输入 ${nextText.length} 个字符` };
+  }
+  if (tool === 'browser_upload') {
+    const rawPaths = Array.isArray(args?.paths)
+      ? args.paths
+      : typeof args?.path === 'string'
+        ? [args.path]
+        : [];
+    const paths = [...new Set(rawPaths.filter((entry) => typeof entry === 'string' && entry.trim()))];
+    if (!paths.length) throw new Error('缺少上传文件路径');
+    if (paths.length > 10) throw new Error('一次最多上传 10 个文件');
+    let totalBytes = 0;
+    const files = paths.map((entry) => {
+      const absolute = path.resolve(entry.trim());
+      if (!path.isAbsolute(entry.trim())) throw new Error(`上传路径必须是绝对路径：${entry}`);
+      let stat;
+      try {
+        stat = fs.statSync(absolute);
+      } catch {
+        throw new Error(`文件不存在：${absolute}`);
+      }
+      if (!stat.isFile()) throw new Error(`不是普通文件：${absolute}`);
+      if (stat.size > 100 * 1024 * 1024) throw new Error(`文件超过 100MB：${absolute}`);
+      totalBytes += stat.size;
+      return absolute;
+    });
+    if (totalBytes > 250 * 1024 * 1024) throw new Error('上传文件总大小超过 250MB');
+    let pageUrl = '';
+    try {
+      pageUrl = guest.getURL() || '';
+    } catch {
+      pageUrl = '';
+    }
+    const site = normalizeBrowserOrigin(pageUrl) || pageUrl || '当前页面';
+    const fileNames = files.map((file) => path.basename(file));
+    if (!win) throw new Error('主窗口不可用，无法确认文件上传');
+    const confirmation = await dialog.showMessageBox(win, {
+      type: 'question',
+      buttons: ['允许上传', '取消'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+      title: '确认上传文件',
+      message: `允许 AI 将 ${files.length} 个文件上传到 ${site}？`,
+      detail: `文件：${fileNames.slice(0, 8).join('、')}${fileNames.length > 8 ? '…' : ''}\n\n上传会将本地文件内容发送到该网站。`,
+    });
+    if (confirmation.response !== 0) throw new Error('已取消文件上传');
+    const marker = crypto.randomBytes(8).toString('hex');
+    const spec = JSON.stringify({
+      ref: typeof args?.ref === 'string' ? args.ref : null,
+      selector: typeof args?.selector === 'string' ? args.selector : null,
+    });
+    const input = await guest.executeJavaScript(
+      `(() => {
+        const spec = ${spec};
+        const inputs = [...document.querySelectorAll('input[type="file"]')];
+        let el = null;
+        if (spec.ref) el = document.querySelector('[data-shanui-ref="' + CSS.escape(spec.ref) + '"]');
+        if (!el && spec.selector) el = document.querySelector(spec.selector);
+        if (!el) el = inputs.length === 1 ? inputs[0] : null;
+        if (!(el instanceof HTMLInputElement) || el.type !== 'file') throw new Error('未找到文件输入元素');
+        if (!el.multiple && ${files.length} > 1) throw new Error('该文件输入只允许单个文件');
+        el.setAttribute('data-shanui-upload-id', ${JSON.stringify(marker)});
+        return { multiple: el.multiple, accept: el.accept || '' };
+      })()`,
+      true,
+    );
+    try {
+      await guestInput(guest, 'DOM.enable');
+      const documentNode = await guestInput(guest, 'DOM.getDocument', {
+        depth: 1,
+        pierce: true,
+      });
+      const query = await guestInput(guest, 'DOM.querySelector', {
+        nodeId: documentNode.root.nodeId,
+        selector: `input[data-shanui-upload-id="${marker}"]`,
+      });
+      if (!query?.nodeId) throw new Error('文件输入元素已失效，请重新获取页面快照');
+      await guestInput(guest, 'DOM.setFileInputFiles', {
+        files,
+        nodeId: query.nodeId,
+      });
+    } finally {
+      await guest
+        .executeJavaScript(
+          `document.querySelector('input[data-shanui-upload-id="${marker}"]')?.removeAttribute('data-shanui-upload-id'); true`,
+          true,
+        )
+        .catch(() => null);
+    }
+    return {
+      type: 'text',
+      text: `已向 ${site} 上传 ${files.length} 个文件：${fileNames.join('、')}${input.multiple ? '（允许多选）' : ''}`,
+    };
   }
   if (tool === 'browser_press_key') {
     const key = typeof args?.key === 'string' ? args.key.toLowerCase() : '';
@@ -1974,11 +2169,19 @@ function createWindow() {
     contents.on('will-navigate', (event, url) => {
       if (!/^https?:\/\//i.test(url)) event.preventDefault();
     });
-    contents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
-      callback(browserFileSystemPermissionAllowed(permission));
-    });
-    contents.session.setPermissionCheckHandler((_webContents, permission) =>
-      browserFileSystemPermissionAllowed(permission),
+    contents.session.setPermissionRequestHandler(
+      (requesting, permission, callback, details) => {
+        callback(browserPermissionAllowedForRequest(requesting, permission, details));
+      },
+    );
+    contents.session.setPermissionCheckHandler(
+      (requesting, permission, requestingOrigin, details) =>
+        browserPermissionAllowedForRequest(
+          requesting,
+          permission,
+          details,
+          requestingOrigin,
+        ),
     );
     attachBrowserGuest(contents);
   });
@@ -2368,14 +2571,36 @@ async function listBrowserSiteData(historyOrigins) {
       if (!site.origins.size) site.origins.add(`https://${host}`);
     }
   }
+  const prefs = readLocalToolsPrefs();
   return [...sites.values()]
-    .map((site) => ({
-      host: site.host,
-      origins: [...site.origins].slice(0, 20),
-      cookieCount: site.cookieCount,
-      hasHistory: site.hasHistory,
-      partitions: [...site.partitions],
-    }))
+    .map((site) => {
+      const origins = [...site.origins].slice(0, 20);
+      const permissions = [
+        ...new Set(
+          origins.flatMap((origin) => prefs.browserSitePermissions?.[origin] || []),
+        ),
+      ].sort();
+      const policies = origins
+        .map((origin) => prefs.browserSiteDownloadPolicies?.[origin])
+        .filter(Boolean);
+      const downloadPolicy =
+        policies.length === 0
+          ? 'default'
+          : policies.every((policy) => policy === 'allow')
+            ? 'allow'
+            : policies.every((policy) => policy === 'deny')
+              ? 'deny'
+              : 'mixed';
+      return {
+        host: site.host,
+        origins,
+        cookieCount: site.cookieCount,
+        hasHistory: site.hasHistory,
+        partitions: [...site.partitions],
+        permissions,
+        downloadPolicy,
+      };
+    })
     .filter((site) => site.cookieCount > 0 || site.hasHistory)
     .sort(
       (left, right) =>
@@ -2430,6 +2655,68 @@ handleIpc('browser:list-site-data', (_event, historyOrigins) =>
 );
 
 handleIpc('browser:clear-site-data', (_event, payload) => clearBrowserSiteData(payload));
+
+handleIpc('browser:set-site-permissions', (_event, payload) => {
+  const origins = [
+    ...new Set(
+      (Array.isArray(payload?.origins) ? payload.origins : [])
+        .slice(0, 50)
+        .map(normalizeBrowserOrigin)
+        .filter(Boolean),
+    ),
+  ];
+  const permissions = [
+    ...new Set(
+      (Array.isArray(payload?.permissions) ? payload.permissions : [])
+        .slice(0, 20)
+        .filter(
+          (permission) =>
+            typeof permission === 'string' &&
+            BROWSER_SITE_PERMISSION_NAMES.has(permission),
+        ),
+    ),
+  ];
+  if (!origins.length) throw new Error('站点 origin 无效');
+  if (!permissions.length) throw new Error('站点权限无效');
+  const enabled = Boolean(payload?.enabled);
+  const prefs = readLocalToolsPrefs();
+  const next = { ...prefs.browserSitePermissions };
+  for (const origin of origins) {
+    const current = new Set(next[origin] || []);
+    for (const permission of permissions) {
+      if (enabled) current.add(permission);
+      else current.delete(permission);
+    }
+    if (current.size) next[origin] = [...current].sort();
+    else delete next[origin];
+  }
+  prefs.browserSitePermissions = normalizeBrowserSitePermissions(next);
+  return writeLocalToolsPrefs(prefs);
+});
+
+handleIpc('browser:set-site-download-policy', (_event, payload) => {
+  const origins = [
+    ...new Set(
+      (Array.isArray(payload?.origins) ? payload.origins : [])
+        .slice(0, 50)
+        .map(normalizeBrowserOrigin)
+        .filter(Boolean),
+    ),
+  ];
+  const policy = ['default', 'allow', 'deny'].includes(payload?.policy)
+    ? payload.policy
+    : null;
+  if (!origins.length) throw new Error('站点 origin 无效');
+  if (!policy) throw new Error('下载策略无效');
+  const prefs = readLocalToolsPrefs();
+  const next = { ...prefs.browserSiteDownloadPolicies };
+  for (const origin of origins) {
+    if (policy === 'default') delete next[origin];
+    else next[origin] = policy;
+  }
+  prefs.browserSiteDownloadPolicies = normalizeBrowserSiteDownloadPolicies(next);
+  return writeLocalToolsPrefs(prefs);
+});
 
 handleIpc('browser:clear-data', async (_event, payload) => {
   const partitions = ['persist:shanui-browser', 'persist:shanui-web-tools'];
@@ -2619,6 +2906,12 @@ handleIpc('app:set-local-tools', async (_event, payload) => {
     browserFullCdp: Boolean(payload?.browserFullCdp),
     browserDownloadPolicy: payload?.browserDownloadPolicy === 'deny' ? 'deny' : 'allow',
     browserFileAccess: Boolean(payload?.browserFileAccess),
+    browserSitePermissions: normalizeBrowserSitePermissions(
+      payload?.browserSitePermissions,
+    ),
+    browserSiteDownloadPolicies: normalizeBrowserSiteDownloadPolicies(
+      payload?.browserSiteDownloadPolicies,
+    ),
   };
   return writeLocalToolsPrefs(prefs);
 });
