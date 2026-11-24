@@ -1,5 +1,9 @@
 const http = require('node:http');
 const nodePath = require('node:path');
+const {
+  parseComputerKeyChord,
+  windowRelativePoint,
+} = require('../mcp/computer-input.cjs');
 
 const port = Number(process.argv[2] || 9333);
 const pdfFixture = process.env.SMOKE_PDF_FIXTURE || '';
@@ -292,7 +296,11 @@ function getJson(url) {
         const names=Object.keys(server?.tools||{});
         return JSON.stringify({
           listWindows:names.includes('computer_list_windows'),
+          getWindow:names.includes('computer_get_window'),
+          launchApp:names.includes('computer_launch_app'),
+          activateWindow:names.includes('computer_activate_window'),
           windowState:names.includes('computer_window_state'),
+          drag:names.includes('computer_drag'),
           setValue:names.includes('computer_set_value'),
           elementAction:names.includes('computer_element_action')
         });
@@ -304,10 +312,39 @@ function getJson(url) {
   check(
     '电脑窗口上下文工具',
     computerTools.listWindows &&
+      computerTools.getWindow &&
+      computerTools.launchApp &&
+      computerTools.activateWindow &&
       computerTools.windowState &&
+      computerTools.drag &&
       computerTools.setValue &&
       computerTools.elementAction,
     JSON.stringify(computerTools),
+  );
+  const keyChord = parseComputerKeyChord('Control_L+Shift_L+period');
+  const keyPoint = windowRelativePoint({
+    x: 12,
+    y: 34,
+    originX: 100,
+    originY: 200,
+    width: 800,
+    height: 600,
+  });
+  let windowsShortcutBlocked = false;
+  try {
+    parseComputerKeyChord('Win+r');
+  } catch {
+    windowsShortcutBlocked = true;
+  }
+  check(
+    '电脑键名与窗口相对坐标',
+    keyChord.primary.vk === 0xbe &&
+      keyChord.modifiers.some((modifier) => modifier.vk === 0x11) &&
+      keyChord.modifiers.some((modifier) => modifier.vk === 0x10) &&
+      keyPoint.x === 112 &&
+      keyPoint.y === 234 &&
+      windowsShortcutBlocked,
+    JSON.stringify({ keyChord, keyPoint, windowsShortcutBlocked }),
   );
   const browserPrivacy = JSON.parse(
     await evaluate(`(async()=>{
